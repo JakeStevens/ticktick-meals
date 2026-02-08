@@ -39,9 +39,21 @@ A Python Flask application that integrates with the TickTick Open API to streaml
    ```bash
    python app.py
    ```
-   - **First Run**: Access `http://127.0.0.1:5000` to log in via OAuth. This saves a `token.json` locally.
-   - **Headless Server**: Use SSH tunneling for the first login: `ssh -L 5000:127.0.0.1:5000 user@server`.
-   - **Access**: After login, the app is accessible at `http://0.0.0.0:5000` (e.g., via Tailscale).
+
+## Headless / Tailscale Deployment
+If you are running this on a headless server (like a Raspberry Pi or VPS) and accessing via Tailscale:
+
+1.  **Initial Login (One-Time Setup)**
+    Since the app is configured for `localhost` redirection (for security), you must perform the first login via an SSH tunnel.
+    *   **On your laptop:** Run `ssh -L 5000:127.0.0.1:5000 user@your-server-ip`
+    *   **On the server:** Run `python app.py`
+    *   **Browser:** Open `http://127.0.0.1:5000`, log in, and authorize TickTick.
+    *   This saves a `token.json` file on the server.
+
+2.  **Regular Usage**
+    *   Once `token.json` exists, stop the SSH tunnel.
+    *   Run `python app.py` on the server again (or keep it running).
+    *   Access the app from any device on your Tailscale network: `http://<tailscale-ip>:5000`
 
 ## Usage
 1. Open the web interface.
