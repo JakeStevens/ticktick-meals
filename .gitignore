@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.env
+token.json
+venv/
+ticktick/
+.DS_Store

@@ -1,0 +1,4 @@
+flask
+requests
+recipe-scrapers
+python-dotenv
