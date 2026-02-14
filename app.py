@@ -4,6 +4,7 @@ from flask import Flask, render_template, redirect, request, session, url_for, j
 import requests
 from recipe_scrapers import scrape_me
 from dotenv import load_dotenv
+from openai import OpenAI
 
 import json
 
@@ -17,6 +18,12 @@ app.secret_key = secrets.token_hex(16)
 CLIENT_ID = os.getenv("TICKTICK_CLIENT_ID")
 CLIENT_SECRET = os.getenv("TICKTICK_CLIENT_SECRET")
 REDIRECT_URI = "http://127.0.0.1:5000/callback"
+
+# LLM Config
+llm_client = OpenAI(
+    base_url=os.getenv("LLM_HOST"),
+    api_key="sk-no-key-required"
+)
 
 # Endpoints
 AUTH_URL = "https://ticktick.com/oauth/authorize"
@@ -90,147 +97,141 @@ import re
 
 
 
+def get_ingredients_from_llm(recipe_name):
+    prompt = f"List the ingredients required for a typical version of {recipe_name}. Keep the ingredients high level, things like spices can be assumed to be available. Provide the list as a simple bulleted list of ingredient names only. If the entry is something that doesn't need ingredients, such as 'left overs', 'freezer meal', 'takeout', 'Brassica', 'date night', or similar non-recipe items, return an empty response."
+    try:
+        response = llm_client.chat.completions.create(
+            model="default", 
+            messages=[
+                {"role": "system", "content": "You are a helpful culinary assistant that provides high-level ingredient lists. If a dish doesn't require ingredients to be bought (like leftovers or takeout), you return nothing."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        content = response.choices[0].message.content
+        ingredients = []
+        for line in content.split('\n'):
+            line = line.strip()
+            if not line: continue
+            line = re.sub(r'^[\s\-\*\d\.\)]+', '', line).strip()
+            if line:
+                ingredients.append(line)
+        return ingredients
+    except Exception as e:
+        print(f"LLM Error: {e}")
+        return []
+
+from flask import Response, stream_with_context
+
 @app.route("/api/scan_meals", methods=["POST"])
-
 def scan_meals():
-
     access_token = session.get("access_token") or load_token()
-
     if not access_token:
-
         return jsonify({"error": "Unauthorized"}), 401
-
     
-
     data = request.json or {}
+    input_list_name = data.get("input_list_name", "Week's Meal Ideas")
+    target_section_name = "Weekly Plan"
 
-    input_list_name = data.get("input_list_name", "Meals")
-
-
-
-    headers = {"Authorization": f"Bearer {access_token}"}
-
-    
-
-    # 1. Find Project ID by Name
-
-    projects_res = requests.get(f"{API_BASE}", headers=headers)
-
-    target_project_id = None
-
-    
-
-    if projects_res.status_code == 200:
-
-        projects = projects_res.json()
-
-        for p in projects:
-
-            if p.get("name", "").lower() == input_list_name.lower():
-
-                target_project_id = p["id"]
-
-                break
-
-    
-
-    if not target_project_id:
-
-        return jsonify({"error": f"Could not find list named '{input_list_name}'"}), 404
-
-
-
-    # 2. Fetch Tasks
-
-    tasks_url = f"{API_BASE}/{target_project_id}/data"
-
-    tasks_res = requests.get(tasks_url, headers=headers)
-
-    
-
-    aggregated_ingredients = {}
-
-
-
-    if tasks_res.status_code == 200:
-
-        data = tasks_res.json()
-
-        tasks = data.get("tasks", [])
-
+    def generate():
+        headers = {"Authorization": f"Bearer {access_token}"}
         
+        # 1. Find Project ID by Name
+        yield f"data: {json.dumps({'status': f'Finding list: {input_list_name}'})}\n\n"
+        projects_res = requests.get(f"{API_BASE}", headers=headers)
+        target_project_id = None
+        
+        if projects_res.status_code == 200:
+            projects = projects_res.json()
+            for p in projects:
+                if p.get("name", "").lower() == input_list_name.lower():
+                    target_project_id = p["id"]
+                    break
+        
+        if not target_project_id:
+            yield f"data: {json.dumps({'error': f'Could not find list named {input_list_name}'})}\n\n"
+            return
 
-        for task in tasks:
+        # 2. Fetch Tasks and Columns
+        yield f"data: {json.dumps({'status': 'Fetching tasks...'})}\n\n"
+        tasks_url = f"{API_BASE}/{target_project_id}/data"
+        tasks_res = requests.get(tasks_url, headers=headers)
+        
+        aggregated_ingredients = {}
 
-            content = task.get("content", "") + " " + task.get("desc", "")
-
-            words = content.split()
-
-            urls = [w for w in words if w.startswith("http")]
-
+        if tasks_res.status_code == 200:
+            data = tasks_res.json()
+            tasks = data.get("tasks", [])
+            columns = data.get("columns", [])
             
+            target_column_id = None
+            for col in columns:
+                if col.get("name", "").lower() == target_section_name.lower():
+                    target_column_id = col["id"]
+                    break
+            
+            # Filter tasks
+            plan_tasks = [t for t in tasks if not target_column_id or t.get("columnId") == target_column_id]
+            total_tasks = len(plan_tasks)
+            
+            for i, task in enumerate(plan_tasks):
+                title = task.get("title", "")
+                content = task.get("content", "")
+                desc = task.get("desc", "")
+                
+                # Combine all text fields to search for URLs
+                all_text = f"{title} {content} {desc}"
+                
+                # Use regex to find URLs
+                # This regex looks for http/https and stops at common delimiters
+                urls = re.findall(r'https?://[^\s\)\>\]\"\'\s]+', all_text)
+                
+                recipe_ingredients = []
+                recipe_name = title
+                scraped_successfully = False
 
-            for url in urls:
+                if urls:
+                    yield f"data: {json.dumps({'status': f'[{i+1}/{total_tasks}] Scraping recipe: {title[:50]}...'})}\n\n"
+                    for url in urls:
+                        try:
+                            # Clean URL (e.g. if it's inside markdown or parens)
+                            clean_url = url.strip(').')
+                            scraper = scrape_me(clean_url)
+                            ings = scraper.ingredients()
+                            if ings:
+                                recipe_ingredients.extend(ings)
+                                recipe_name = scraper.title()
+                                scraped_successfully = True
+                                break 
+                        except Exception as e:
+                            print(f"Failed to scrape {url}: {e}")
+                
+                if not scraped_successfully:
+                    # Filter out obvious non-recipes before asking LLM
+                    # (The LLM prompt already handles this, but we can skip the call if we want)
+                    yield f"data: {json.dumps({'status': f'[{i+1}/{total_tasks}] Asking LLM for: {title[:50]}...'})}\n\n"
+                    recipe_ingredients = get_ingredients_from_llm(title)
+                
+                for raw_ing in recipe_ingredients:
+                    base_name = normalize_ingredient(raw_ing)
+                    if base_name not in aggregated_ingredients:
+                        aggregated_ingredients[base_name] = {
+                            "name": base_name,
+                            "details": [], 
+                            "raw_lines": [],
+                            "original_task_ids": set()
+                        }
+                    aggregated_ingredients[base_name]["details"].append(f"{raw_ing} (from {recipe_name})")
+                    aggregated_ingredients[base_name]["raw_lines"].append(raw_ing)
+                    aggregated_ingredients[base_name]["original_task_ids"].add(task["id"])
 
-                try:
+        results = []
+        for k, v in aggregated_ingredients.items():
+            v["original_task_ids"] = list(v["original_task_ids"])
+            results.append(v)
 
-                    scraper = scrape_me(url)
+        yield f"data: {json.dumps({'ingredients': results})}\n\n"
 
-                    ingredients = scraper.ingredients()
-
-                    recipe_name = scraper.title()
-
-                    
-
-                    for raw_ing in ingredients:
-
-                        base_name = normalize_ingredient(raw_ing)
-
-                        
-
-                        if base_name not in aggregated_ingredients:
-
-                            aggregated_ingredients[base_name] = {
-
-                                "name": base_name,
-
-                                "details": [], # List of strings like "1 cup (Lasagna)"
-
-                                "raw_lines": [],
-
-                                "original_task_ids": set()
-
-                            }
-
-                        
-
-                        aggregated_ingredients[base_name]["details"].append(f"{raw_ing} (from {recipe_name})")
-
-                        aggregated_ingredients[base_name]["raw_lines"].append(raw_ing)
-
-                        aggregated_ingredients[base_name]["original_task_ids"].add(task["id"])
-
-
-
-                except Exception as e:
-
-                    print(f"Failed to scrape {url}: {e}")
-
-
-
-    # Convert sets to lists for JSON serialization
-
-    results = []
-
-    for k, v in aggregated_ingredients.items():
-
-        v["original_task_ids"] = list(v["original_task_ids"])
-
-        results.append(v)
-
-
-
-    return jsonify({"ingredients": results})
+    return Response(stream_with_context(generate()), mimetype="text/event-stream")
 
 
 
@@ -313,142 +314,44 @@ def normalize_ingredient(text):
 
 
 @app.route("/api/create_grocery_list", methods=["POST"])
-
 def create_grocery_list():
-
     access_token = session.get("access_token") or load_token()
-
     if not access_token:
-
         return jsonify({"error": "Unauthorized"}), 401
 
-
-
     data = request.json
-
-    selected_items = data.get("items", []) # List of objects {name: "Flour", details: [...]}
-
-    output_list_name = data.get("output_list_name", "Inbox")
-
-    parent_task_name = data.get("parent_task_name", "").strip()
-
-
+    selected_items = data.get("items", []) 
+    output_list_name = "Groceries"
 
     if not selected_items:
-
         return jsonify({"status": "No items to add"})
 
-
-
     headers = {
-
         "Authorization": f"Bearer {access_token}",
-
         "Content-Type": "application/json"
-
     }
-
     
-
     # 1. Find Target Project
-
     target_project_id = "inbox" # Default
-
-    if output_list_name.lower() != "inbox":
-
-        projects_res = requests.get(API_BASE, headers=headers)
-
-        if projects_res.status_code == 200:
-
-            for p in projects_res.json():
-
-                if p.get("name", "").lower() == output_list_name.lower():
-
-                    target_project_id = p["id"]
-
-                    break
-
+    projects_res = requests.get(API_BASE, headers=headers)
+    if projects_res.status_code == 200:
+        for p in projects_res.json():
+            if p.get("name", "").lower() == output_list_name.lower():
+                target_project_id = p["id"]
+                break
     
-
-    # 2. Logic: One Parent Task with Subtasks OR Individual Tasks
-
-    if parent_task_name:
-
-        # Create/Find Parent Task
-
-        # For simplicity, we just create a new one every time to avoid searching complexity
-
-        # (User can name it "Groceries 10/25")
-
-        
-
-        parent_payload = {
-
+    # 2. Create Individual Tasks for each item
+    responses = []
+    for item in selected_items:
+        task_payload = {
             "projectId": target_project_id,
-
-            "title": parent_task_name,
-
-            "items": []
-
+            "title": item,
+            "status": 0
         }
-
+        res = requests.post("https://api.ticktick.com/open/v1/task", json=task_payload, headers=headers)
+        responses.append(res.status_code)
         
-
-        for item in selected_items:
-
-            # Item is expected to be the 'base name' or a formatted string from the UI
-
-            # We can include the raw lines in the subtask title or just the base name
-
-            # Let's use the Base Name + maybe total count?
-
-            # User wants aggregation, so "Flour" is the item.
-
-            # If they want details, maybe put them in description? TickTick subtasks are simple.
-
-            # Let's just put the name.
-
-            parent_payload["items"].append({
-
-                "title": item, # e.g. "Flour"
-
-                "status": 0
-
-            })
-
-            
-
-        res = requests.post("https://api.ticktick.com/open/v1/task", json=parent_payload, headers=headers)
-
-        return jsonify({"status": "success", "mode": "subtasks", "data": res.json()})
-
-        
-
-    else:
-
-        # Create Individual Tasks for each item
-
-        responses = []
-
-        for item in selected_items:
-
-            task_payload = {
-
-                "projectId": target_project_id,
-
-                "title": item,
-
-                "status": 0
-
-            }
-
-            res = requests.post("https://api.ticktick.com/open/v1/task", json=task_payload, headers=headers)
-
-            responses.append(res.status_code)
-
-            
-
-        return jsonify({"status": "success", "mode": "tasks", "count": len(responses)})
+    return jsonify({"status": "success", "count": len(responses)})
 
 
 

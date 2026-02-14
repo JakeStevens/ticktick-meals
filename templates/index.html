@@ -25,18 +25,13 @@
             
             <div class="config-row mt-4">
                 <label class="form-label fw-bold">Scan List (Recipes)</label>
-                <input type="text" id="input-list" class="form-control" value="Meals" placeholder="e.g. Meals">
+                <input type="text" id="input-list" class="form-control" value="Week's Meal Ideas" readonly disabled>
+                <div class="form-text">Scanning list: Week's Meal Ideas, Section: Weekly Plan</div>
             </div>
 
             <div class="config-row">
                 <label class="form-label fw-bold">Target List (Groceries)</label>
-                <input type="text" id="output-list" class="form-control" value="Inbox" placeholder="e.g. Shopping">
-            </div>
-
-            <div class="config-row">
-                <label class="form-label fw-bold">Parent Task Name (Optional)</label>
-                <input type="text" id="parent-task" class="form-control" value="Grocery Run" placeholder="Leave empty for individual tasks">
-                <div class="form-text">If set, items become subtasks of this task.</div>
+                <input type="text" id="output-list" class="form-control" value="Groceries" readonly disabled>
             </div>
 
             <button onclick="startScan()" class="btn btn-primary btn-lg mt-3">Start Scanning</button>
@@ -83,19 +78,15 @@
 
         // Config State
         let config = {
-            inputList: "",
-            outputList: "",
+            inputList: "Week's Meal Ideas",
+            outputList: "Groceries",
             parentTask: ""
         };
 
         async function startScan() {
-            config.inputList = document.getElementById('input-list').value;
-            config.outputList = document.getElementById('output-list').value;
-            config.parentTask = document.getElementById('parent-task').value;
-
             document.getElementById('start-view').classList.add('hidden');
             document.getElementById('loading-view').classList.remove('hidden');
-            document.getElementById('loading-text').innerText = "Scanning " + config.inputList + "...";
+            document.getElementById('loading-text').innerText = "Connecting...";
 
             try {
                 const response = await fetch('/api/scan_meals', { 
@@ -103,22 +94,45 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ input_list_name: config.inputList })
                 });
-                const data = await response.json();
-                
-                if (data.error) {
-                    alert(data.error);
-                    location.reload();
-                    return;
-                }
 
-                ingredientsQueue = data.ingredients; // Now these are groups {name, details:[]}
-                if (ingredientsQueue.length === 0) {
-                    alert("No recipes found in '" + config.inputList + "'!");
-                    location.reload();
-                    return;
-                }
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = "";
 
-                startChat();
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    
+                    buffer += decoder.decode(value, { stream: true });
+                    let lines = buffer.split("\n\n");
+                    buffer = lines.pop();
+
+                    for (let line of lines) {
+                        if (line.startsWith("data: ")) {
+                            let data = JSON.parse(line.substring(6));
+                            
+                            if (data.status) {
+                                document.getElementById('loading-text').innerText = data.status;
+                            }
+                            
+                            if (data.error) {
+                                alert(data.error);
+                                location.reload();
+                                return;
+                            }
+                            
+                            if (data.ingredients) {
+                                ingredientsQueue = data.ingredients;
+                                if (ingredientsQueue.length === 0) {
+                                    alert("No ingredients found!");
+                                    location.reload();
+                                    return;
+                                }
+                                startChat();
+                            }
+                        }
+                    }
+                }
             } catch (err) {
                 alert("Error scanning meals.");
                 console.error(err);
