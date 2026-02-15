@@ -10,6 +10,7 @@ import json
 import socket
 import ipaddress
 from urllib.parse import urlparse
+from datetime import datetime
 from flask import Response, stream_with_context
 
 # Load environment variables
@@ -321,10 +322,31 @@ def create_grocery_list():
 
     data = request.json
     selected_items = data.get("items", []) 
+    corrections = data.get("corrections", [])
     output_list_name = "Groceries"
 
+    # Save corrections if any
+    if corrections:
+        try:
+            timestamp = datetime.now().isoformat()
+            file_corrections = []
+            for corr in corrections:
+                file_corrections.append({
+                    "timestamp": timestamp,
+                    "original_name": corr.get("original_name"),
+                    "corrected_name": corr.get("corrected_name"),
+                    "context": corr.get("context", [])
+                })
+
+            corrections_file = "corrections.jsonl"
+            with open(corrections_file, "a") as f:
+                for correction in file_corrections:
+                    f.write(json.dumps(correction) + "\n")
+        except Exception as e:
+            print(f"Error saving corrections: {e}")
+
     if not selected_items:
-        return jsonify({"status": "No items to add"})
+        return jsonify({"status": "No items to add", "corrections_saved": len(corrections)})
 
     headers = {
         "Authorization": f"Bearer {access_token}",
