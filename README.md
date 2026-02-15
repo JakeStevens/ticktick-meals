@@ -33,8 +33,16 @@ The application operates as a linear pipeline that transforms TickTick tasks int
 - **Extracted Schema**: A simple list of strings: `["1 cup of flour", "2 eggs", ...]`.
 
 ### 3. Normalization & Aggregation
-- **Process**: Heuristically strips units (cup, tbsp, etc.), numbers, and parentheticals to identify the "base" ingredient. Aggregates identical base ingredients to avoid duplicates across multiple recipes.
-- **Aggregated Schema**:
+- **Process**: Heuristically strips units (cup, tbsp, etc.), numbers, and parentheticals to identify the "base" ingredient.
+- **Normalized Schema (Single Item)**:
+  ```json
+  {
+    "base_name": "flour",
+    "raw_text": "1 cup of flour",
+    "source_task_id": "task_uuid_1"
+  }
+  ```
+- **Aggregated Schema (Collection)**:
   ```json
   {
     "flour": {
