@@ -2,6 +2,7 @@ import os
 import secrets
 from flask import Flask, render_template, redirect, request, session, url_for, jsonify
 import requests
+from concurrent.futures import ThreadPoolExecutor
 from recipe_scrapers import scrape_me
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -352,15 +353,22 @@ def create_grocery_list():
                 target_project_id = p["id"]
                 break
     
-    responses = []
-    for item in selected_items:
+    def create_task(item):
         task_payload = {
             "projectId": target_project_id,
             "title": item,
             "status": 0
         }
-        res = requests.post("https://api.ticktick.com/open/v1/task", json=task_payload, headers=headers)
-        responses.append(res.status_code)
+        try:
+            res = requests.post("https://api.ticktick.com/open/v1/task", json=task_payload, headers=headers)
+            return res.status_code
+        except Exception as e:
+            print(f"Error creating task for {item}: {e}")
+            return 500
+
+    responses = []
+    with ThreadPoolExecutor() as executor:
+        responses = list(executor.map(create_task, selected_items))
         
     return jsonify({"status": "success", "count": len(responses)})
 

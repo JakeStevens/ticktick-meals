@@ -5,3 +5,6 @@ token.json
 venv/
 ticktick/
 .DS_Store
+
+*.db
+*.jsonl
