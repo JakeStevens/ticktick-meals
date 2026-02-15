@@ -9,6 +9,47 @@ A Python Flask application that integrates with the TickTick Open API to streaml
 - **Interactive Vetting**: A "Chatbot-style" web UI to approve or reject ingredients one by one.
 - **Grocery List Generation**: Adds approved items to a target TickTick list (default: "Inbox"), either as individual tasks or subtasks of a parent task.
 
+## System Design & Pipeline
+
+The application operates as a linear pipeline that transforms TickTick tasks into a curated grocery list.
+
+### 1. Input (TickTick Tasks)
+- **Source**: A TickTick project (e.g., "Week's Meal Ideas") and a specific column (e.g., "Weekly Plan").
+- **Task Schema**:
+  ```json
+  {
+    "title": "Recipe Name or Meal Idea",
+    "content": "Optional Markdown or URL",
+    "desc": "Optional Description or URL",
+    "id": "Task ID",
+    "columnId": "Section ID"
+  }
+  ```
+
+### 2. Extraction (Scraping & LLM)
+- **Process**:
+  - **Scraper**: If a URL is detected in `title`, `content`, or `desc`, it uses `recipe-scrapers` to pull the precise ingredient list.
+  - **LLM**: If no URL is found, it queries a configured LLM (`LLM_HOST`) to generate a high-level ingredient list based on the task title.
+- **Extracted Schema**: A simple list of strings: `["1 cup of flour", "2 eggs", ...]`.
+
+### 3. Normalization & Aggregation
+- **Process**: Heuristically strips units (cup, tbsp, etc.), numbers, and parentheticals to identify the "base" ingredient. Aggregates identical base ingredients to avoid duplicates across multiple recipes.
+- **Aggregated Schema**:
+  ```json
+  {
+    "flour": {
+      "name": "flour",
+      "details": ["1 cup of flour (from Pizza)", "200g flour (from Bread)"],
+      "raw_lines": ["1 cup of flour", "200g flour"],
+      "original_task_ids": ["task_uuid_1", "task_uuid_2"]
+    }
+  }
+  ```
+
+### 4. Output (TickTick Grocery List)
+- **Destination**: A TickTick project (default: "Groceries").
+- **Action**: Creates a new task for each selected ingredient from the vetting UI.
+
 ## Setup
 
 1. **Prerequisites**
