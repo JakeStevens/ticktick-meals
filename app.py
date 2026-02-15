@@ -307,6 +307,7 @@ def create_grocery_list():
     data = request.json
     selected_items = data.get("items", []) 
     corrections = data.get("corrections", [])
+    rejected_items = data.get("rejected_items", [])
     session_id = data.get("session_id")
     output_list_name = "Groceries"
 
@@ -332,6 +333,29 @@ def create_grocery_list():
 
         if session_id:
             database.log_event(session_id, "corrections", corrections)
+
+    # Save rejections if any
+    if rejected_items:
+        try:
+            timestamp = datetime.now().isoformat()
+            file_rejections = []
+            for item in rejected_items:
+                file_rejections.append({
+                    "timestamp": timestamp,
+                    "name": item.get("name"),
+                    "reason": item.get("reason"),
+                    "context": item.get("context", [])
+                })
+
+            rejections_file = "rejections.jsonl"
+            with open(rejections_file, "a") as f:
+                for rejection in file_rejections:
+                    f.write(json.dumps(rejection) + "\n")
+        except Exception as e:
+            print(f"Error saving rejections: {e}")
+
+        if session_id:
+            database.log_event(session_id, "rejections", rejected_items)
 
     if session_id:
         database.complete_session(session_id)
