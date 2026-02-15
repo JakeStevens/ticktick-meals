@@ -9,12 +9,16 @@ import re
 import json
 from datetime import datetime
 from flask import Response, stream_with_context
+import database
 
 # Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(16)
+
+# Initialize DB
+database.init_db()
 
 # TickTick Config
 CLIENT_ID = os.getenv("TICKTICK_CLIENT_ID")
@@ -87,8 +91,12 @@ def callback():
     else:
         return f"Error logging in: {response.text}"
 
-def get_ingredients_from_llm(recipe_name):
+def get_ingredients_from_llm(recipe_name, session_id=None):
     prompt = f"List the ingredients required for a typical version of {recipe_name}. Keep the ingredients high level, things like spices can be assumed to be available. Provide the list as a simple bulleted list of ingredient names only. If the entry is something that doesn't need ingredients, such as 'left overs', 'freezer meal', 'takeout', 'Brassica', 'date night', or similar non-recipe items, return an empty response."
+
+    if session_id:
+        database.log_event(session_id, "llm_prompt", {"recipe": recipe_name, "prompt": prompt})
+
     try:
         response = llm_client.chat.completions.create(
             model="default", 
@@ -98,6 +106,10 @@ def get_ingredients_from_llm(recipe_name):
             ]
         )
         content = response.choices[0].message.content
+
+        if session_id:
+            database.log_event(session_id, "llm_response", {"recipe": recipe_name, "response": content})
+
         ingredients = []
         for line in content.split('\n'):
             line = line.strip()
@@ -108,6 +120,8 @@ def get_ingredients_from_llm(recipe_name):
         return ingredients
     except Exception as e:
         print(f"LLM Error: {e}")
+        if session_id:
+            database.log_event(session_id, "llm_error", {"recipe": recipe_name, "error": str(e)})
         return []
 
 def normalize_ingredient(text):
@@ -168,6 +182,9 @@ def scan_meals():
     target_section_name = "Weekly Plan"
 
     def generate():
+        session_id = database.create_session()
+        database.log_event(session_id, "start_scan", {"input_list": input_list_name})
+
         headers = {"Authorization": f"Bearer {access_token}"}
         
         # 1. Find Project ID by Name
@@ -235,10 +252,22 @@ def scan_meals():
                 
                 if not scraped_successfully:
                     yield f"data: {json.dumps({'status': f'[{i+1}/{total_tasks}] Asking LLM for: {title[:50]}...'})}\n\n"
-                    recipe_ingredients = get_ingredients_from_llm(title)
+                    recipe_ingredients = get_ingredients_from_llm(title, session_id=session_id)
                 
+                database.log_event(session_id, "raw_ingredients", {
+                    "recipe": recipe_name,
+                    "source": "scrape" if scraped_successfully else "llm",
+                    "ingredients": recipe_ingredients
+                })
+
                 for raw_ing in recipe_ingredients:
                     norm = normalize_ingredient(raw_ing)
+
+                    database.log_event(session_id, "normalization", {
+                        "input": raw_ing,
+                        "output": norm
+                    })
+
                     base_name = norm["name"]
                     if base_name not in aggregated_ingredients:
                         aggregated_ingredients[base_name] = {
@@ -263,7 +292,9 @@ def scan_meals():
             v["original_task_ids"] = list(v["original_task_ids"])
             results.append(v)
 
-        yield f"data: {json.dumps({'ingredients': results})}\n\n"
+        database.log_event(session_id, "aggregation", {"result": results})
+
+        yield f"data: {json.dumps({'ingredients': results, 'session_id': session_id})}\n\n"
 
     return Response(stream_with_context(generate()), mimetype="text/event-stream")
 
@@ -276,6 +307,7 @@ def create_grocery_list():
     data = request.json
     selected_items = data.get("items", []) 
     corrections = data.get("corrections", [])
+    session_id = data.get("session_id")
     output_list_name = "Groceries"
 
     # Save corrections if any
@@ -297,6 +329,12 @@ def create_grocery_list():
                     f.write(json.dumps(correction) + "\n")
         except Exception as e:
             print(f"Error saving corrections: {e}")
+
+        if session_id:
+            database.log_event(session_id, "corrections", corrections)
+
+    if session_id:
+        database.complete_session(session_id)
 
     if not selected_items:
         return jsonify({"status": "No items to add", "corrections_saved": len(corrections)})
