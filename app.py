@@ -7,6 +7,9 @@ from dotenv import load_dotenv
 from openai import OpenAI
 import re
 import json
+import socket
+import ipaddress
+from urllib.parse import urlparse
 from flask import Response, stream_with_context
 
 # Load environment variables
@@ -31,6 +34,47 @@ AUTH_URL = "https://ticktick.com/oauth/authorize"
 TOKEN_URL = "https://ticktick.com/oauth/token"
 API_BASE = "https://api.ticktick.com/open/v1/project"
 TOKEN_FILE = "token.json"
+
+def is_safe_url(url):
+    """
+    Validates a URL to prevent SSRF attacks.
+    Checks that the scheme is http/https and the hostname does not resolve to a private/loopback IP.
+    """
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ('http', 'https'):
+            return False
+
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+
+        # Check if it's an IP address directly
+        try:
+            ip = ipaddress.ip_address(hostname)
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_unspecified:
+                return False
+        except ValueError:
+            # Not an IP address, so it's a hostname. Resolve it.
+            try:
+                # getaddrinfo returns a list of 5-tuples. The 5th element is the sockaddr.
+                # sockaddr[0] is the IP address.
+                infos = socket.getaddrinfo(hostname, None)
+                for info in infos:
+                    ip_str = info[4][0]
+                    ip = ipaddress.ip_address(ip_str)
+                    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_unspecified:
+                        return False
+            except socket.gaierror:
+                # If we can't resolve it, it might be safer to block it or
+                # let the scraper handle it if we trust the scraper.
+                # In a restricted environment, this might block legitimate URLs.
+                # However, for SSRF protection, being conservative is usually better.
+                return False
+
+        return True
+    except Exception:
+        return False
 
 def load_token():
     if os.path.exists(TOKEN_FILE):
@@ -222,6 +266,9 @@ def scan_meals():
                     for url in urls:
                         try:
                             clean_url = url.strip(').')
+                            if not is_safe_url(clean_url):
+                                print(f"Skipping potentially unsafe URL: {clean_url}")
+                                continue
                             scraper = scrape_me(clean_url)
                             ings = scraper.ingredients()
                             if ings:
