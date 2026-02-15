@@ -5,8 +5,9 @@ import requests
 from recipe_scrapers import scrape_me
 from dotenv import load_dotenv
 from openai import OpenAI
-
+import re
 import json
+from flask import Response, stream_with_context
 
 # Load environment variables
 load_dotenv()
@@ -85,18 +86,6 @@ def callback():
     else:
         return f"Error logging in: {response.text}"
 
-import re
-
-
-
-# ... (Previous imports remain, keeping them implicit for the tool to find context if needed, but since I am replacing the whole file content in my head, I need to be careful. 
-
-# actually, the tool 'replace' works on exact string matching. I should use 'write_file' if I am rewriting significant logic, or 'replace' carefully. 
-
-# The changes are scattered (helper function, updated endpoints). 'write_file' is safer and cleaner here given the extent of logic changes.)
-
-
-
 def get_ingredients_from_llm(recipe_name):
     prompt = f"List the ingredients required for a typical version of {recipe_name}. Keep the ingredients high level, things like spices can be assumed to be available. Provide the list as a simple bulleted list of ingredient names only. If the entry is something that doesn't need ingredients, such as 'left overs', 'freezer meal', 'takeout', 'Brassica', 'date night', or similar non-recipe items, return an empty response."
     try:
@@ -120,7 +109,52 @@ def get_ingredients_from_llm(recipe_name):
         print(f"LLM Error: {e}")
         return []
 
-from flask import Response, stream_with_context
+def normalize_ingredient(text):
+    """
+    Heuristic to extract base name, quantity, and unit.
+    Returns a dict: {'name': str, 'quantity': str, 'unit': str}
+    """
+    original_text = text
+    text = text.lower()
+    text = re.sub(r'\(.*?\)', '', text).strip() # Remove text in parens
+
+    # Common units/measurements to strip
+    units = [
+        "cup", "cups", "tbsp", "tsp", "tablespoon", "teaspoon", 
+        "oz", "ounce", "ounces", "lb", "lbs", "pound", "pounds", 
+        "g", "gram", "grams", "kg", "ml", "l", "liter", "pinch", 
+        "slice", "slices", "clove", "cloves", "can", "cans", "jar", "jars",
+        "package", "packages", "bunch", "bunches", "large", "small", "medium",
+        "head", "heads", "bag", "bags"
+    ]
+
+    # Extract leading numbers/fractions/ranges
+    quantity_match = re.match(r'^([\d\s\/\.\-]+)', text)
+    quantity = quantity_match.group(1).strip() if quantity_match else ""
+    
+    # Strip quantity from text
+    text = re.sub(r'^[\d\s\/\.\-]+', '', text).strip()
+    
+    words = text.split()
+    unit = ""
+    if words and words[0] in units:
+        unit = words.pop(0)
+    
+    # Check for "of" (e.g., "1 cup of flour")
+    if words and words[0] == "of":
+        words.pop(0)
+        
+    base_name = " ".join(words).strip()
+    
+    # Fallback for strings that don't match the pattern well
+    if not base_name:
+        base_name = original_text
+
+    return {
+        "name": base_name,
+        "quantity": quantity,
+        "unit": unit
+    }
 
 @app.route("/api/scan_meals", methods=["POST"])
 def scan_meals():
@@ -169,7 +203,6 @@ def scan_meals():
                     target_column_id = col["id"]
                     break
             
-            # Filter tasks
             plan_tasks = [t for t in tasks if not target_column_id or t.get("columnId") == target_column_id]
             total_tasks = len(plan_tasks)
             
@@ -177,12 +210,7 @@ def scan_meals():
                 title = task.get("title", "")
                 content = task.get("content", "")
                 desc = task.get("desc", "")
-                
-                # Combine all text fields to search for URLs
                 all_text = f"{title} {content} {desc}"
-                
-                # Use regex to find URLs
-                # This regex looks for http/https and stops at common delimiters
                 urls = re.findall(r'https?://[^\s\)\>\]\"\'\s]+', all_text)
                 
                 recipe_ingredients = []
@@ -193,7 +221,6 @@ def scan_meals():
                     yield f"data: {json.dumps({'status': f'[{i+1}/{total_tasks}] Scraping recipe: {title[:50]}...'})}\n\n"
                     for url in urls:
                         try:
-                            # Clean URL (e.g. if it's inside markdown or parens)
                             clean_url = url.strip(').')
                             scraper = scrape_me(clean_url)
                             ings = scraper.ingredients()
@@ -206,20 +233,26 @@ def scan_meals():
                             print(f"Failed to scrape {url}: {e}")
                 
                 if not scraped_successfully:
-                    # Filter out obvious non-recipes before asking LLM
-                    # (The LLM prompt already handles this, but we can skip the call if we want)
                     yield f"data: {json.dumps({'status': f'[{i+1}/{total_tasks}] Asking LLM for: {title[:50]}...'})}\n\n"
                     recipe_ingredients = get_ingredients_from_llm(title)
                 
                 for raw_ing in recipe_ingredients:
-                    base_name = normalize_ingredient(raw_ing)
+                    norm = normalize_ingredient(raw_ing)
+                    base_name = norm["name"]
                     if base_name not in aggregated_ingredients:
                         aggregated_ingredients[base_name] = {
                             "name": base_name,
+                            "amounts": [],
                             "details": [], 
                             "raw_lines": [],
                             "original_task_ids": set()
                         }
+                    
+                    aggregated_ingredients[base_name]["amounts"].append({
+                        "quantity": norm["quantity"],
+                        "unit": norm["unit"],
+                        "source": recipe_name
+                    })
                     aggregated_ingredients[base_name]["details"].append(f"{raw_ing} (from {recipe_name})")
                     aggregated_ingredients[base_name]["raw_lines"].append(raw_ing)
                     aggregated_ingredients[base_name]["original_task_ids"].add(task["id"])
@@ -232,86 +265,6 @@ def scan_meals():
         yield f"data: {json.dumps({'ingredients': results})}\n\n"
 
     return Response(stream_with_context(generate()), mimetype="text/event-stream")
-
-
-
-def normalize_ingredient(text):
-
-    """
-
-    Simple heuristic to extract the 'main' ingredient name.
-
-    1. Lowercase.
-
-    2. Remove text in parens.
-
-    3. Remove leading numbers and common units.
-
-    """
-
-    text = text.lower()
-
-    text = re.sub(r'\([^)]*\)', '', text) # Remove (optional)
-
-    
-
-    # Common units/measurements to strip
-
-    units = [
-
-        "cup", "cups", "tbsp", "tsp", "tablespoon", "teaspoon", 
-
-        "oz", "ounce", "ounces", "lb", "lbs", "pound", "pounds", 
-
-        "g", "gram", "grams", "kg", "ml", "l", "liter", "pinch", 
-
-        "slice", "slices", "clove", "cloves", "can", "cans", "jar", "jars",
-
-        "package", "packages", "bunch", "bunches", "large", "small", "medium"
-
-    ]
-
-    
-
-    # Regex to match: Start -> Number/Fraction -> Unit (optional) -> "of" (optional) -> Rest
-
-    # e.g. "1/2 cup of flour" -> "flour"
-
-    # e.g. "2 onions" -> "onions"
-
-    
-
-    # Remove leading numbers/fractions/ranges (e.g. 1, 1/2, 1-2, 1.5)
-
-    text = re.sub(r'^[\d\s\/\.\-]+', '', text).strip()
-
-    
-
-    words = text.split()
-
-    if not words: return text
-
-    
-
-    # Check if first word is a unit
-
-    if words[0] in units:
-
-        words.pop(0)
-
-    
-
-    # Check for "of"
-
-    if words and words[0] == "of":
-
-        words.pop(0)
-
-        
-
-    return " ".join(words).strip()
-
-
 
 @app.route("/api/create_grocery_list", methods=["POST"])
 def create_grocery_list():
@@ -331,7 +284,6 @@ def create_grocery_list():
         "Content-Type": "application/json"
     }
     
-    # 1. Find Target Project
     target_project_id = "inbox" # Default
     projects_res = requests.get(API_BASE, headers=headers)
     if projects_res.status_code == 200:
@@ -340,7 +292,6 @@ def create_grocery_list():
                 target_project_id = p["id"]
                 break
     
-    # 2. Create Individual Tasks for each item
     responses = []
     for item in selected_items:
         task_payload = {
@@ -352,8 +303,6 @@ def create_grocery_list():
         responses.append(res.status_code)
         
     return jsonify({"status": "success", "count": len(responses)})
-
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", debug=True)

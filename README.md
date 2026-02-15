@@ -38,6 +38,8 @@ The application operates as a linear pipeline that transforms TickTick tasks int
   ```json
   {
     "base_name": "flour",
+    "quantity": "1",
+    "unit": "cup",
     "raw_text": "1 cup of flour",
     "source_task_id": "task_uuid_1"
   }
@@ -47,6 +49,10 @@ The application operates as a linear pipeline that transforms TickTick tasks int
   {
     "flour": {
       "name": "flour",
+      "amounts": [
+        {"quantity": "1", "unit": "cup", "source": "Pizza"},
+        {"quantity": "200", "unit": "g", "source": "Bread"}
+      ],
       "details": ["1 cup of flour (from Pizza)", "200g flour (from Bread)"],
       "raw_lines": ["1 cup of flour", "200g flour"],
       "original_task_ids": ["task_uuid_1", "task_uuid_2"]
