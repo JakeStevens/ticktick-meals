@@ -87,6 +87,7 @@
         let selectedItems = [];
         let corrections = [];
         let currentIndex = 0;
+        let sessionId = null;
 
         // Config State
         let config = {
@@ -194,6 +195,9 @@
                             
                             if (data.ingredients) {
                                 ingredientsQueue = data.ingredients;
+                                if (data.session_id) {
+                                    sessionId = data.session_id;
+                                }
                                 if (ingredientsQueue.length === 0) {
                                     alert("No ingredients found!");
                                     location.reload();
@@ -260,7 +264,8 @@
                         items: selectedItems,
                         corrections: corrections,
                         output_list_name: config.outputList,
-                        parent_task_name: config.parentTask
+                        parent_task_name: config.parentTask,
+                        session_id: sessionId
                     })
                 });
                 
