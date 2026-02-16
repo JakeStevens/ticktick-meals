@@ -367,7 +367,7 @@ def create_grocery_list():
             return 500
 
     responses = []
-    with ThreadPoolExecutor() as executor:
+    with ThreadPoolExecutor(max_workers=5) as executor:
         responses = list(executor.map(create_task, selected_items))
         
     return jsonify({"status": "success", "count": len(responses)})
