@@ -76,6 +76,32 @@
             </div>
         </div>
 
+        <!-- Skipped Meals View -->
+        <div id="skipped-view" class="card mx-auto hidden">
+            <h3 class="mb-3">Skipped Meals</h3>
+            <p class="text-muted">The following meals required no ingredients according to the AI:</p>
+            <ul id="skipped-list" class="list-group text-start mb-4" style="max-height: 200px; overflow-y: auto;">
+                <!-- List items injected here -->
+            </ul>
+            <button onclick="showManualAdd()" class="btn btn-primary btn-lg w-100">Continue</button>
+        </div>
+
+        <!-- Manual Add View -->
+        <div id="manual-add-view" class="card mx-auto hidden">
+            <h3 class="mb-3">Add Anything Else?</h3>
+
+            <div class="input-group mb-3">
+                <input type="text" id="manual-input" class="form-control" placeholder="Milk, Bread, etc." onkeydown="if(event.key==='Enter') addManualItem()">
+                <button class="btn btn-outline-secondary" type="button" onclick="addManualItem()">Add</button>
+            </div>
+
+            <ul id="manual-list" class="list-group text-start mb-4 w-100" style="max-height: 200px; overflow-y: auto;">
+                <!-- Manually added items -->
+            </ul>
+
+            <button onclick="finishPlanning()" class="btn btn-success btn-lg w-100">Finish & Sync</button>
+        </div>
+
         <!-- Success View -->
         <div id="success-view" class="card mx-auto hidden">
             <h2 class="text-success">Done! 🎉</h2>
@@ -87,7 +113,9 @@
 
     <script>
         let ingredientsQueue = [];
+        let skippedMeals = [];
         let selectedItems = [];
+        let manualItems = [];
         let corrections = [];
         let rejectedItems = [];
         let currentIndex = 0;
@@ -202,7 +230,11 @@
                                 if (data.session_id) {
                                     sessionId = data.session_id;
                                 }
-                                if (ingredientsQueue.length === 0) {
+                                if (data.skipped_meals) {
+                                    skippedMeals = data.skipped_meals;
+                                }
+
+                                if (ingredientsQueue.length === 0 && skippedMeals.length === 0) {
                                     alert("No ingredients found!");
                                     location.reload();
                                     return;
@@ -221,14 +253,18 @@
 
         function startChat() {
             document.getElementById('loading-view').classList.add('hidden');
-            document.getElementById('chat-view').classList.remove('hidden');
             currentIndex = 0;
-            showCurrentItem();
+            if (ingredientsQueue.length === 0) {
+                showSkippedMeals();
+            } else {
+                document.getElementById('chat-view').classList.remove('hidden');
+                showCurrentItem();
+            }
         }
 
         function showCurrentItem() {
             if (currentIndex >= ingredientsQueue.length) {
-                finishPlanning();
+                showSkippedMeals();
                 return;
             }
 
@@ -270,17 +306,71 @@
             showCurrentItem();
         }
 
-        async function finishPlanning() {
+        function showSkippedMeals() {
             document.getElementById('chat-view').classList.add('hidden');
+
+            if (!skippedMeals || skippedMeals.length === 0) {
+                showManualAdd();
+                return;
+            }
+
+            const list = document.getElementById('skipped-list');
+            list.innerHTML = skippedMeals.map(meal => `<li class="list-group-item">${meal}</li>`).join('');
+
+            document.getElementById('skipped-view').classList.remove('hidden');
+        }
+
+        function showManualAdd() {
+            document.getElementById('skipped-view').classList.add('hidden');
+            document.getElementById('chat-view').classList.add('hidden');
+            document.getElementById('manual-add-view').classList.remove('hidden');
+            renderManualList();
+        }
+
+        function addManualItem() {
+            const input = document.getElementById('manual-input');
+            const val = input.value.trim();
+            if (val) {
+                manualItems.push(val);
+                input.value = "";
+                renderManualList();
+            }
+            input.focus();
+        }
+
+        function removeManualItem(index) {
+            manualItems.splice(index, 1);
+            renderManualList();
+        }
+
+        function renderManualList() {
+            const list = document.getElementById('manual-list');
+            if (manualItems.length === 0) {
+                list.innerHTML = '<li class="list-group-item text-muted fst-italic text-center">No extra items added</li>';
+            } else {
+                list.innerHTML = manualItems.map((item, index) => `
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        ${item}
+                        <button onclick="removeManualItem(${index})" class="btn btn-sm btn-danger">X</button>
+                    </li>
+                `).join('');
+            }
+        }
+
+        async function finishPlanning() {
+            document.getElementById('manual-add-view').classList.add('hidden');
             document.getElementById('loading-view').classList.remove('hidden');
             document.getElementById('loading-text').innerText = "Syncing to TickTick...";
+
+            const finalItems = [...selectedItems, ...manualItems];
 
             try {
                 const response = await fetch('/api/create_grocery_list', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
-                        items: selectedItems,
+                        items: finalItems,
+                        manual_items: manualItems,
                         corrections: corrections,
                         rejected_items: rejectedItems,
                         output_list_name: config.outputList,
@@ -291,7 +381,7 @@
                 
                 document.getElementById('loading-view').classList.add('hidden');
                 document.getElementById('success-view').classList.remove('hidden');
-                document.getElementById('count-added').innerText = selectedItems.length;
+                document.getElementById('count-added').innerText = finalItems.length;
             } catch (err) {
                 alert("Error creating list.");
             }
