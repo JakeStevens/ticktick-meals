@@ -247,6 +247,8 @@ def scan_meals():
             plan_tasks = [t for t in tasks if not target_column_id or t.get("columnId") == target_column_id]
             total_tasks = len(plan_tasks)
             
+            skipped_meals = []
+
             for i, task in enumerate(plan_tasks):
                 title = task.get("title", "")
                 content = task.get("content", "")
@@ -277,6 +279,9 @@ def scan_meals():
                     yield f"data: {json.dumps({'status': f'[{i+1}/{total_tasks}] Asking LLM for: {title[:50]}...'})}\n\n"
                     recipe_ingredients = get_ingredients_from_llm(title, session_id=session_id)
                 
+                if not recipe_ingredients:
+                    skipped_meals.append(recipe_name)
+
                 database.log_event(session_id, "raw_ingredients", {
                     "recipe": recipe_name,
                     "source": "scrape" if scraped_successfully else "llm",
@@ -317,7 +322,7 @@ def scan_meals():
 
         database.log_event(session_id, "aggregation", {"result": results})
 
-        yield f"data: {json.dumps({'ingredients': results, 'session_id': session_id})}\n\n"
+        yield f"data: {json.dumps({'ingredients': results, 'session_id': session_id, 'skipped_meals': skipped_meals})}\n\n"
 
     return Response(stream_with_context(generate()), mimetype="text/event-stream")
 
