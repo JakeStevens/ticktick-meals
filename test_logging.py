@@ -17,6 +17,9 @@ class TestLogging(unittest.TestCase):
         self.app = app.app.test_client()
         self.app.testing = True
 
+        # Clear cache
+        app.PROJECT_CACHE.clear()
+
     def tearDown(self):
         if os.path.exists(self.test_db):
             os.remove(self.test_db)
