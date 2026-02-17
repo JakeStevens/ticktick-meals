@@ -39,6 +39,8 @@ TOKEN_URL = "https://ticktick.com/oauth/token"
 API_BASE = "https://api.ticktick.com/open/v1/project"
 TOKEN_FILE = "token.json"
 
+URL_PATTERN = re.compile(r'https?://[^\s\)\>\]\"\'\s]+')
+
 # Caching for project list
 PROJECT_CACHE = {}  # token -> (timestamp, projects)
 CACHE_TTL = 300     # 5 minutes
@@ -254,7 +256,7 @@ def scan_meals():
                 content = task.get("content", "")
                 desc = task.get("desc", "")
                 all_text = f"{title} {content} {desc}"
-                urls = re.findall(r'https?://[^\s\)\>\]\"\'\s]+', all_text)
+                urls = URL_PATTERN.findall(all_text)
                 
                 recipe_ingredients = []
                 recipe_name = title
