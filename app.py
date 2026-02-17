@@ -1,4 +1,5 @@
 import os
+import time
 import secrets
 from flask import Flask, render_template, redirect, request, session, url_for, jsonify
 import requests
@@ -37,6 +38,28 @@ AUTH_URL = "https://ticktick.com/oauth/authorize"
 TOKEN_URL = "https://ticktick.com/oauth/token"
 API_BASE = "https://api.ticktick.com/open/v1/project"
 TOKEN_FILE = "token.json"
+
+# Caching for project list
+PROJECT_CACHE = {}  # token -> (timestamp, projects)
+CACHE_TTL = 300     # 5 minutes
+
+def get_projects(access_token):
+    now = time.time()
+    if access_token in PROJECT_CACHE:
+        timestamp, projects = PROJECT_CACHE[access_token]
+        if now - timestamp < CACHE_TTL:
+            return projects
+
+    headers = {"Authorization": f"Bearer {access_token}"}
+    try:
+        res = requests.get(API_BASE, headers=headers)
+        if res.status_code == 200:
+            projects = res.json()
+            PROJECT_CACHE[access_token] = (now, projects)
+            return projects
+    except Exception as e:
+        print(f"Error fetching projects: {e}")
+    return None
 
 def load_token():
     if os.path.exists(TOKEN_FILE):
@@ -190,11 +213,10 @@ def scan_meals():
         
         # 1. Find Project ID by Name
         yield f"data: {json.dumps({'status': f'Finding list: {input_list_name}'})}\n\n"
-        projects_res = requests.get(f"{API_BASE}", headers=headers)
+        projects = get_projects(access_token)
         target_project_id = None
         
-        if projects_res.status_code == 200:
-            projects = projects_res.json()
+        if projects:
             for p in projects:
                 if p.get("name", "").lower() == input_list_name.lower():
                     target_project_id = p["id"]
@@ -370,9 +392,9 @@ def create_grocery_list():
     }
     
     target_project_id = "inbox" # Default
-    projects_res = requests.get(API_BASE, headers=headers)
-    if projects_res.status_code == 200:
-        for p in projects_res.json():
+    projects = get_projects(access_token)
+    if projects:
+        for p in projects:
             if p.get("name", "").lower() == output_list_name.lower():
                 target_project_id = p["id"]
                 break
