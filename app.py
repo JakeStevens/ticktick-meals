@@ -321,6 +321,7 @@ def scan_meals():
             results.append(v)
 
         database.log_event(session_id, "aggregation", {"result": results})
+        database.log_event(session_id, "skipped_meals", skipped_meals)
 
         yield f"data: {json.dumps({'ingredients': results, 'session_id': session_id, 'skipped_meals': skipped_meals})}\n\n"
 
@@ -334,10 +335,14 @@ def create_grocery_list():
 
     data = request.json
     selected_items = data.get("items", []) 
+    manual_items = data.get("manual_items", [])
     corrections = data.get("corrections", [])
     rejected_items = data.get("rejected_items", [])
     session_id = data.get("session_id")
     output_list_name = "Groceries"
+
+    if session_id and manual_items:
+        database.log_event(session_id, "manual_items", manual_items)
 
     # Save corrections if any
     if corrections:
