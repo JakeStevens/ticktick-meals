@@ -79,10 +79,8 @@ def save_token(token_data):
 @app.route("/")
 def index():
     access_token = load_token()
-    if not access_token:
-        return render_template("login.html")
     session["access_token"] = access_token
-    return render_template("index.html")
+    return render_template("index.html", logged_in=bool(access_token))
 
 @app.route("/login")
 def login():
@@ -197,6 +195,87 @@ def normalize_ingredient(text):
         "unit": unit
     }
 
+def process_tasks(tasks, session_id):
+    total_tasks = len(tasks)
+    aggregated_ingredients = {}
+    skipped_meals = []
+
+    for i, task in enumerate(tasks):
+        title = task.get("title", "")
+        content = task.get("content", "")
+        desc = task.get("desc", "")
+        all_text = f"{title} {content} {desc}"
+        urls = URL_PATTERN.findall(all_text)
+
+        recipe_ingredients = []
+        recipe_name = title
+        scraped_successfully = False
+
+        if urls:
+            yield f"data: {json.dumps({'status': f'[{i+1}/{total_tasks}] Scraping recipe: {title[:50]}...'})}\n\n"
+            for url in urls:
+                try:
+                    clean_url = url.strip(').,!? :;')
+                    scraper = scrape_me(clean_url)
+                    ings = scraper.ingredients()
+                    if ings:
+                        recipe_ingredients.extend(ings)
+                        recipe_name = scraper.title()
+                        scraped_successfully = True
+                        break
+                except Exception as e:
+                    print(f"Failed to scrape {url}: {e}")
+
+        if not scraped_successfully:
+            yield f"data: {json.dumps({'status': f'[{i+1}/{total_tasks}] Asking LLM for: {title[:50]}...'})}\n\n"
+            recipe_ingredients = get_ingredients_from_llm(title, session_id=session_id)
+
+        if not recipe_ingredients:
+            skipped_meals.append(recipe_name)
+
+        database.log_event(session_id, "raw_ingredients", {
+            "recipe": recipe_name,
+            "source": "scrape" if scraped_successfully else "llm",
+            "ingredients": recipe_ingredients
+        })
+
+        for raw_ing in recipe_ingredients:
+            norm = normalize_ingredient(raw_ing)
+
+            database.log_event(session_id, "normalization", {
+                "input": raw_ing,
+                "output": norm
+            })
+
+            base_name = norm["name"]
+            if base_name not in aggregated_ingredients:
+                aggregated_ingredients[base_name] = {
+                    "name": base_name,
+                    "amounts": [],
+                    "details": [],
+                    "raw_lines": [],
+                    "original_task_ids": set()
+                }
+
+            aggregated_ingredients[base_name]["amounts"].append({
+                "quantity": norm["quantity"],
+                "unit": norm["unit"],
+                "source": recipe_name
+            })
+            aggregated_ingredients[base_name]["details"].append(f"{raw_ing} (from {recipe_name})")
+            aggregated_ingredients[base_name]["raw_lines"].append(raw_ing)
+            aggregated_ingredients[base_name]["original_task_ids"].add(task["id"])
+
+    results = []
+    for k, v in aggregated_ingredients.items():
+        v["original_task_ids"] = list(v["original_task_ids"])
+        results.append(v)
+
+    database.log_event(session_id, "aggregation", {"result": results})
+    database.log_event(session_id, "skipped_meals", skipped_meals)
+
+    yield f"data: {json.dumps({'ingredients': results, 'session_id': session_id, 'skipped_meals': skipped_meals})}\n\n"
+
 @app.route("/api/scan_meals", methods=["POST"])
 def scan_meals():
     access_token = session.get("access_token") or load_token()
@@ -233,8 +312,7 @@ def scan_meals():
         tasks_url = f"{API_BASE}/{target_project_id}/data"
         tasks_res = requests.get(tasks_url, headers=headers)
         
-        aggregated_ingredients = {}
-
+        plan_tasks = []
         if tasks_res.status_code == 200:
             data = tasks_res.json()
             tasks = data.get("tasks", [])
@@ -247,95 +325,44 @@ def scan_meals():
                     break
             
             plan_tasks = [t for t in tasks if not target_column_id or t.get("columnId") == target_column_id]
-            total_tasks = len(plan_tasks)
-            
-            skipped_meals = []
 
-            for i, task in enumerate(plan_tasks):
-                title = task.get("title", "")
-                content = task.get("content", "")
-                desc = task.get("desc", "")
-                all_text = f"{title} {content} {desc}"
-                urls = URL_PATTERN.findall(all_text)
-                
-                recipe_ingredients = []
-                recipe_name = title
-                scraped_successfully = False
+        yield from process_tasks(plan_tasks, session_id)
 
-                if urls:
-                    yield f"data: {json.dumps({'status': f'[{i+1}/{total_tasks}] Scraping recipe: {title[:50]}...'})}\n\n"
-                    for url in urls:
-                        try:
-                            clean_url = url.strip(').')
-                            scraper = scrape_me(clean_url)
-                            ings = scraper.ingredients()
-                            if ings:
-                                recipe_ingredients.extend(ings)
-                                recipe_name = scraper.title()
-                                scraped_successfully = True
-                                break 
-                        except Exception as e:
-                            print(f"Failed to scrape {url}: {e}")
-                
-                if not scraped_successfully:
-                    yield f"data: {json.dumps({'status': f'[{i+1}/{total_tasks}] Asking LLM for: {title[:50]}...'})}\n\n"
-                    recipe_ingredients = get_ingredients_from_llm(title, session_id=session_id)
-                
-                if not recipe_ingredients:
-                    skipped_meals.append(recipe_name)
+    return Response(stream_with_context(generate()), mimetype="text/event-stream")
 
-                database.log_event(session_id, "raw_ingredients", {
-                    "recipe": recipe_name,
-                    "source": "scrape" if scraped_successfully else "llm",
-                    "ingredients": recipe_ingredients
-                })
+@app.route("/api/test_scan", methods=["POST"])
+def test_scan():
+    data = request.json or {}
+    raw_text = data.get("text", "")
 
-                for raw_ing in recipe_ingredients:
-                    norm = normalize_ingredient(raw_ing)
+    def generate():
+        session_id = database.create_session()
+        database.log_event(session_id, "start_test_scan", {"input_text": raw_text})
 
-                    database.log_event(session_id, "normalization", {
-                        "input": raw_ing,
-                        "output": norm
-                    })
+        # Parse text into dummy tasks
+        lines = [l.strip() for l in raw_text.split('\n') if l.strip()]
+        tasks = []
+        for i, line in enumerate(lines):
+            tasks.append({
+                "id": f"test-task-{i}",
+                "title": line,
+                "content": "",
+                "desc": ""
+            })
 
-                    base_name = norm["name"]
-                    if base_name not in aggregated_ingredients:
-                        aggregated_ingredients[base_name] = {
-                            "name": base_name,
-                            "amounts": [],
-                            "details": [], 
-                            "raw_lines": [],
-                            "original_task_ids": set()
-                        }
-                    
-                    aggregated_ingredients[base_name]["amounts"].append({
-                        "quantity": norm["quantity"],
-                        "unit": norm["unit"],
-                        "source": recipe_name
-                    })
-                    aggregated_ingredients[base_name]["details"].append(f"{raw_ing} (from {recipe_name})")
-                    aggregated_ingredients[base_name]["raw_lines"].append(raw_ing)
-                    aggregated_ingredients[base_name]["original_task_ids"].add(task["id"])
-
-        results = []
-        for k, v in aggregated_ingredients.items():
-            v["original_task_ids"] = list(v["original_task_ids"])
-            results.append(v)
-
-        database.log_event(session_id, "aggregation", {"result": results})
-        database.log_event(session_id, "skipped_meals", skipped_meals)
-
-        yield f"data: {json.dumps({'ingredients': results, 'session_id': session_id, 'skipped_meals': skipped_meals})}\n\n"
+        yield from process_tasks(tasks, session_id)
 
     return Response(stream_with_context(generate()), mimetype="text/event-stream")
 
 @app.route("/api/create_grocery_list", methods=["POST"])
 def create_grocery_list():
+    data = request.json or {}
+    test_mode = data.get("test_mode", False)
+
     access_token = session.get("access_token") or load_token()
-    if not access_token:
+    if not access_token and not test_mode:
         return jsonify({"error": "Unauthorized"}), 401
 
-    data = request.json
     selected_items = data.get("items", []) 
     manual_items = data.get("manual_items", [])
     corrections = data.get("corrections", [])
@@ -397,6 +424,9 @@ def create_grocery_list():
 
     if not selected_items:
         return jsonify({"status": "No items to add", "corrections_saved": len(corrections)})
+
+    if test_mode:
+        return jsonify({"status": "success", "count": len(selected_items), "test_mode": True})
 
     headers = {
         "Authorization": f"Bearer {access_token}",
