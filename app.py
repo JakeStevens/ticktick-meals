@@ -39,7 +39,7 @@ TOKEN_URL = "https://ticktick.com/oauth/token"
 API_BASE = "https://api.ticktick.com/open/v1/project"
 TOKEN_FILE = "token.json"
 
-URL_PATTERN = re.compile(r'https?://[^\s\)\>\]\"\'\s]+')
+URL_PATTERN = re.compile(r"https?://[^\s\)\>\]\"']+(?<![\.\,\!\?\:\;])")
 
 # Caching for project list
 PROJECT_CACHE = {}  # token -> (timestamp, projects)
@@ -266,7 +266,7 @@ def scan_meals():
                     yield f"data: {json.dumps({'status': f'[{i+1}/{total_tasks}] Scraping recipe: {title[:50]}...'})}\n\n"
                     for url in urls:
                         try:
-                            clean_url = url.strip(').')
+                            clean_url = url.strip(').,!? :;')
                             scraper = scrape_me(clean_url)
                             ings = scraper.ingredients()
                             if ings:
