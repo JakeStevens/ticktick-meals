@@ -1,11 +1,23 @@
 import sqlite3
 import json
 import uuid
+import os
 from datetime import datetime
 
 DB_FILE = "meal_planner.db"
 
 def init_db():
+    # Ensure the database file is created with restricted permissions
+    if not os.path.exists(DB_FILE):
+        try:
+            fd = os.open(DB_FILE, os.O_CREAT | os.O_EXCL, 0o600)
+            os.close(fd)
+        except FileExistsError:
+            pass
+    else:
+        # If it already exists, ensure permissions are restricted
+        os.chmod(DB_FILE, 0o600)
+
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS sessions

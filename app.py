@@ -37,7 +37,7 @@ llm_client = OpenAI(
 AUTH_URL = "https://ticktick.com/oauth/authorize"
 TOKEN_URL = "https://ticktick.com/oauth/token"
 API_BASE = "https://api.ticktick.com/open/v1/project"
-TOKEN_FILE = "token.json"
+TOKEN_FILE = os.getenv("TICKTICK_TOKEN_FILE", "token.json")
 
 URL_PATTERN = re.compile(r'https?://[^\s\)\>\]\"\'\s]+')
 
@@ -73,8 +73,19 @@ def load_token():
     return None
 
 def save_token(token_data):
-    with open(TOKEN_FILE, "w") as f:
-        json.dump(token_data, f)
+    try:
+        # Ensure parent directory exists with restricted permissions
+        dir_name = os.path.dirname(TOKEN_FILE)
+        if dir_name and not os.path.exists(dir_name):
+            os.makedirs(dir_name, mode=0o700)
+
+        # Write the token file with restricted permissions (0o600)
+        fd = os.open(TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.chmod(TOKEN_FILE, 0o600)
+        with os.fdopen(fd, 'w') as f:
+            json.dump(token_data, f)
+    except Exception as e:
+        print(f"Error saving token: {e}")
 
 @app.route("/")
 def index():
@@ -360,7 +371,10 @@ def create_grocery_list():
                 })
 
             corrections_file = "corrections.jsonl"
-            with open(corrections_file, "a") as f:
+            # Ensure restricted permissions (0o600)
+            fd = os.open(corrections_file, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            os.chmod(corrections_file, 0o600)
+            with os.fdopen(fd, "a") as f:
                 for correction in file_corrections:
                     f.write(json.dumps(correction) + "\n")
         except Exception as e:
@@ -383,7 +397,10 @@ def create_grocery_list():
                 })
 
             rejections_file = "rejections.jsonl"
-            with open(rejections_file, "a") as f:
+            # Ensure restricted permissions (0o600)
+            fd = os.open(rejections_file, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            os.chmod(rejections_file, 0o600)
+            with os.fdopen(fd, "a") as f:
                 for rejection in file_rejections:
                     f.write(json.dumps(rejection) + "\n")
         except Exception as e:
