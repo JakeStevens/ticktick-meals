@@ -103,13 +103,7 @@ class TestLogging(unittest.TestCase):
 
     def test_create_grocery_list_logging(self):
         # First, create a session directly in DB
-        database.create_session()
-        # Retrieve the session id we just created (hacky but works since it's the only one)
-        conn = sqlite3.connect(self.test_db)
-        c = conn.cursor()
-        c.execute("SELECT id FROM sessions")
-        session_id = c.fetchone()[0]
-        conn.close()
+        session_id = database.create_session()
 
         with patch('app.load_token') as mock_load_token, \
              patch('app.requests.get') as mock_get, \
