@@ -67,9 +67,11 @@ def load_token():
     if os.path.exists(TOKEN_FILE):
         try:
             with open(TOKEN_FILE, "r") as f:
-                return json.load(f).get("access_token")
-        except:
-            return None
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data.get("access_token")
+        except (OSError, json.JSONDecodeError):
+            pass
     return None
 
 def save_token(token_data):
