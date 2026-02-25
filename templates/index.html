@@ -34,7 +34,21 @@
                 <input type="text" id="output-list" class="form-control" value="Groceries" readonly disabled>
             </div>
 
+            {% if logged_in %}
             <button onclick="startScan()" class="btn btn-primary btn-lg mt-3">Start Scanning</button>
+            {% else %}
+            <a href="/login" class="btn btn-primary btn-lg mt-3">Login to TickTick</a>
+            {% endif %}
+            <button onclick="showTestMode()" class="btn btn-secondary mt-3">Test Mode</button>
+        </div>
+
+        <!-- Test Input View -->
+        <div id="test-input-view" class="card mx-auto hidden">
+            <h2>Test Mode</h2>
+            <p>Enter recipes or URLs (one per line):</p>
+            <textarea id="test-input-text" class="form-control mb-3" rows="10" placeholder="https://example.com/recipe&#10;Chicken Parmesan"></textarea>
+            <button onclick="startTestScan()" class="btn btn-primary btn-lg">Run Test</button>
+            <button onclick="location.reload()" class="btn btn-outline-secondary mt-2">Cancel</button>
         </div>
 
         <!-- Loading View -->
@@ -120,6 +134,7 @@
         let rejectedItems = [];
         let currentIndex = 0;
         let sessionId = null;
+        let isTestMode = false;
 
         // Config State
         let config = {
@@ -127,6 +142,86 @@
             outputList: "Groceries",
             parentTask: ""
         };
+
+        function showTestMode() {
+            document.getElementById('start-view').classList.add('hidden');
+            document.getElementById('test-input-view').classList.remove('hidden');
+        }
+
+        async function startTestScan() {
+            const text = document.getElementById('test-input-text').value;
+            if (!text.trim()) {
+                alert("Please enter some text.");
+                return;
+            }
+
+            isTestMode = true;
+            document.getElementById('test-input-view').classList.add('hidden');
+            document.getElementById('loading-view').classList.remove('hidden');
+            document.getElementById('loading-text').innerText = "Processing test input...";
+
+            try {
+                const response = await fetch('/api/test_scan', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: text })
+                });
+
+                await handleScanResponse(response);
+            } catch (err) {
+                alert("Error scanning meals.");
+                console.error(err);
+                location.reload();
+            }
+        }
+
+        async function handleScanResponse(response) {
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                let lines = buffer.split("\n\n");
+                buffer = lines.pop();
+
+                for (let line of lines) {
+                    if (line.startsWith("data: ")) {
+                        let data = JSON.parse(line.substring(6));
+
+                        if (data.status) {
+                            document.getElementById('loading-text').innerText = data.status;
+                        }
+
+                        if (data.error) {
+                            alert(data.error);
+                            location.reload();
+                            return;
+                        }
+
+                        if (data.ingredients) {
+                            ingredientsQueue = data.ingredients;
+                            if (data.session_id) {
+                                sessionId = data.session_id;
+                            }
+                            if (data.skipped_meals) {
+                                skippedMeals = data.skipped_meals;
+                            }
+
+                            if (ingredientsQueue.length === 0 && skippedMeals.length === 0) {
+                                alert("No ingredients found!");
+                                location.reload();
+                                return;
+                            }
+                            startChat();
+                        }
+                    }
+                }
+            }
+        }
 
         // Edit Logic
         function enableEdit() {
@@ -199,51 +294,7 @@
                     body: JSON.stringify({ input_list_name: config.inputList })
                 });
 
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = "";
-
-                while (true) {
-                    const { value, done } = await reader.read();
-                    if (done) break;
-                    
-                    buffer += decoder.decode(value, { stream: true });
-                    let lines = buffer.split("\n\n");
-                    buffer = lines.pop();
-
-                    for (let line of lines) {
-                        if (line.startsWith("data: ")) {
-                            let data = JSON.parse(line.substring(6));
-                            
-                            if (data.status) {
-                                document.getElementById('loading-text').innerText = data.status;
-                            }
-                            
-                            if (data.error) {
-                                alert(data.error);
-                                location.reload();
-                                return;
-                            }
-                            
-                            if (data.ingredients) {
-                                ingredientsQueue = data.ingredients;
-                                if (data.session_id) {
-                                    sessionId = data.session_id;
-                                }
-                                if (data.skipped_meals) {
-                                    skippedMeals = data.skipped_meals;
-                                }
-
-                                if (ingredientsQueue.length === 0 && skippedMeals.length === 0) {
-                                    alert("No ingredients found!");
-                                    location.reload();
-                                    return;
-                                }
-                                startChat();
-                            }
-                        }
-                    }
-                }
+                await handleScanResponse(response);
             } catch (err) {
                 alert("Error scanning meals.");
                 console.error(err);
@@ -375,7 +426,8 @@
                         rejected_items: rejectedItems,
                         output_list_name: config.outputList,
                         parent_task_name: config.parentTask,
-                        session_id: sessionId
+                        session_id: sessionId,
+                        test_mode: isTestMode
                     })
                 });
                 

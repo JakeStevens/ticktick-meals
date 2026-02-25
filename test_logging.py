@@ -11,6 +11,8 @@ class TestLogging(unittest.TestCase):
         # Use a temporary DB for testing
         self.test_db = "test_meal_planner.db"
         database.DB_FILE = self.test_db
+        # Close any existing connection to ensure we use the test DB
+        database.close_db()
         # Initialize the DB
         database.init_db()
 
