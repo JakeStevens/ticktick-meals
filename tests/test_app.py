@@ -53,5 +53,15 @@ class TestLoadToken(unittest.TestCase):
             token = load_token()
             self.assertIsNone(token)
 
+    @patch("os.path.exists")
+    def test_load_token_not_a_dict(self, mock_exists):
+        # Case: token.json exists but contains a list instead of a dict
+        mock_exists.return_value = True
+        token_data = ["not", "a", "dict"]
+
+        with patch("builtins.open", mock_open(read_data=json.dumps(token_data))):
+            token = load_token()
+            self.assertIsNone(token)
+
 if __name__ == "__main__":
     unittest.main()
