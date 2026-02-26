@@ -79,10 +79,10 @@
             </div>
             
             <div class="d-flex flex-column gap-2 mt-4">
-                <button onclick="handleYes()" class="btn btn-success btn-lg w-100 py-3">Add to List ✅</button>
+                <button onclick="handleYes()" class="btn btn-success btn-lg w-100 py-3 action-btn">Add to List ✅</button>
                 <div class="d-flex gap-2">
-                    <button onclick="handleHaveIt()" class="btn btn-outline-secondary w-50 py-2">Have it 🏠</button>
-                    <button onclick="handleBadInfo()" class="btn btn-outline-danger w-50 py-2">Bad Info 🚫</button>
+                    <button onclick="handleHaveIt()" class="btn btn-outline-secondary w-50 py-2 action-btn">Have it 🏠</button>
+                    <button onclick="handleBadInfo()" class="btn btn-outline-danger w-50 py-2 action-btn">Bad Info 🚫</button>
                 </div>
             </div>
             <div class="mt-3 text-muted">
@@ -135,6 +135,63 @@
         let currentIndex = 0;
         let sessionId = null;
         let isTestMode = false;
+        let isEditing = false;
+
+        const UNITS = [
+            "cup", "cups", "tbsp", "tsp", "tablespoon", "teaspoon",
+            "oz", "ounce", "ounces", "lb", "lbs", "pound", "pounds",
+            "g", "gram", "grams", "kg", "ml", "l", "liter", "pinch",
+            "slice", "slices", "clove", "cloves", "can", "cans", "jar", "jars",
+            "package", "packages", "bunch", "bunches", "large", "small", "medium",
+            "head", "heads", "bag", "bags"
+        ];
+
+        function normalizeIngredient(text) {
+            let originalText = text;
+            text = text.toLowerCase();
+            text = text.replace(/\(.*?\)/g, '').trim(); // Remove parens
+
+            // Extract quantity
+            let quantity = "";
+            const quantityMatch = text.match(/^([\d\s\/\.\-]+)/);
+            if (quantityMatch) {
+                quantity = quantityMatch[1].trim();
+                text = text.replace(/^[\d\s\/\.\-]+/, '').trim();
+            }
+
+            let words = text.split(/\s+/);
+            let unit = "";
+
+            if (words.length > 0 && UNITS.includes(words[0])) {
+                unit = words.shift();
+            }
+
+            if (words.length > 0 && words[0] === "of") {
+                words.shift();
+            }
+
+            let baseName = words.join(" ").trim();
+
+            if (!baseName) {
+                baseName = originalText;
+            }
+
+            return {
+                name: baseName,
+                quantity: quantity,
+                unit: unit
+            };
+        }
+
+        function lockUI() {
+            isEditing = true;
+            document.querySelectorAll('.action-btn').forEach(btn => btn.disabled = true);
+        }
+
+        function unlockUI() {
+            isEditing = false;
+            document.querySelectorAll('.action-btn').forEach(btn => btn.disabled = false);
+        }
 
         // Config State
         let config = {
@@ -225,6 +282,7 @@
 
         // Edit Logic
         function enableEdit() {
+            lockUI();
             const display = document.getElementById('ingredient-display');
             const input = document.getElementById('ingredient-edit-input');
             const editBtn = document.getElementById('edit-btn');
@@ -250,7 +308,7 @@
                 corrections.push({
                     original_name: originalName,
                     corrected_name: newName,
-                    context: ingredientsQueue[currentIndex].raw_lines
+                    context: ingredientsQueue[currentIndex].instances.map(i => i.raw)
                 });
 
                 // Update data
@@ -262,6 +320,7 @@
         }
 
         function cancelEdit() {
+            unlockUI();
             const display = document.getElementById('ingredient-display');
             const input = document.getElementById('ingredient-edit-input');
             const editBtn = document.getElementById('edit-btn');
@@ -271,6 +330,86 @@
             input.classList.add('hidden');
             editBtn.classList.remove('hidden');
             editActions.classList.add('hidden');
+        }
+
+        function enableInstanceEdit(index) {
+            lockUI();
+            document.getElementById(`inst-display-${index}`).classList.add('hidden');
+            document.getElementById(`inst-edit-btn-${index}`).classList.add('hidden');
+            document.getElementById(`inst-input-${index}`).classList.remove('hidden');
+            document.getElementById(`inst-actions-${index}`).classList.remove('hidden');
+            document.getElementById(`inst-input-${index}`).focus();
+
+            // Handle enter key
+            document.getElementById(`inst-input-${index}`).addEventListener('keydown', function(e) {
+                if(e.key === 'Enter') saveInstanceEdit(index);
+                if(e.key === 'Escape') cancelInstanceEdit(index);
+            });
+        }
+
+        function cancelInstanceEdit(index) {
+            unlockUI();
+            document.getElementById(`inst-display-${index}`).classList.remove('hidden');
+            document.getElementById(`inst-edit-btn-${index}`).classList.remove('hidden');
+            document.getElementById(`inst-input-${index}`).classList.add('hidden');
+            document.getElementById(`inst-actions-${index}`).classList.add('hidden');
+        }
+
+        function saveInstanceEdit(index) {
+            const input = document.getElementById(`inst-input-${index}`);
+            const newText = input.value.trim();
+            const group = ingredientsQueue[currentIndex];
+            const oldInstance = group.instances[index];
+
+            if (!newText || newText === oldInstance.raw) {
+                cancelInstanceEdit(index);
+                return;
+            }
+
+            const normalized = normalizeIngredient(newText);
+
+            // If name changed, move it
+            if (normalized.name !== group.name) {
+                // Remove from current
+                group.instances.splice(index, 1);
+
+                // Add to new group
+                let targetGroup = ingredientsQueue.find(g => g.name === normalized.name);
+                const newInstance = {
+                    raw: newText,
+                    quantity: normalized.quantity,
+                    unit: normalized.unit,
+                    source: oldInstance.source,
+                    original_name: normalized.name
+                };
+
+                if (targetGroup) {
+                    targetGroup.instances.push(newInstance);
+                } else {
+                    // Create new group
+                    ingredientsQueue.push({
+                        name: normalized.name,
+                        instances: [newInstance],
+                        original_task_ids: []
+                    });
+                }
+
+                // If current group is empty, remove it
+                if (group.instances.length === 0) {
+                    ingredientsQueue.splice(currentIndex, 1);
+                    // Since we removed current item, the next item slides into currentIndex
+                    // So we don't need to increment currentIndex, but showCurrentItem will show the new item at currentIndex
+                }
+
+            } else {
+                // Just update current instance
+                oldInstance.raw = newText;
+                oldInstance.quantity = normalized.quantity;
+                oldInstance.unit = normalized.unit;
+            }
+
+            unlockUI();
+            showCurrentItem();
         }
 
         // Handle Enter key in input
@@ -324,8 +463,24 @@
             document.getElementById('ingredient-display').innerText = group.name;
             
             // Show details (amounts and source recipes)
-            const detailsHtml = group.details.map(d => `<div>• ${d}</div>`).join('');
-            document.getElementById('recipe-context').innerHTML = detailsHtml;
+            const instancesHtml = group.instances.map((inst, index) => {
+                const displayText = `${inst.raw} (from ${inst.source})`;
+                return `
+                    <div class="d-flex align-items-center mb-1">
+                        <span id="inst-display-${index}" class="me-2">• ${displayText}</span>
+                        <input type="text" id="inst-input-${index}" class="form-control form-control-sm hidden" value="${inst.raw}" style="max-width: 300px;">
+
+                        <button id="inst-edit-btn-${index}" onclick="enableInstanceEdit(${index})" class="btn btn-sm btn-link text-decoration-none p-0 ms-2" title="Edit">✏️</button>
+
+                        <div id="inst-actions-${index}" class="hidden ms-2">
+                            <button onclick="saveInstanceEdit(${index})" class="btn btn-sm btn-success p-0 px-1">✅</button>
+                            <button onclick="cancelInstanceEdit(${index})" class="btn btn-sm btn-danger p-0 px-1">❌</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            document.getElementById('recipe-context').innerHTML = instancesHtml;
 
             document.getElementById('progress-indicator').innerText = `Item ${currentIndex + 1} of ${ingredientsQueue.length}`;
         }
@@ -341,7 +496,7 @@
             rejectedItems.push({
                 name: ingredientsQueue[currentIndex].name,
                 reason: "have_it",
-                context: ingredientsQueue[currentIndex].raw_lines
+                context: ingredientsQueue[currentIndex].instances.map(i => i.raw)
             });
             currentIndex++;
             showCurrentItem();
@@ -351,7 +506,7 @@
             rejectedItems.push({
                 name: ingredientsQueue[currentIndex].name,
                 reason: "bad_parsing",
-                context: ingredientsQueue[currentIndex].raw_lines
+                context: ingredientsQueue[currentIndex].instances.map(i => i.raw)
             });
             currentIndex++;
             showCurrentItem();

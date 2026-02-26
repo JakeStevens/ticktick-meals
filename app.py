@@ -253,19 +253,17 @@ def process_tasks(tasks, session_id):
             if base_name not in aggregated_ingredients:
                 aggregated_ingredients[base_name] = {
                     "name": base_name,
-                    "amounts": [],
-                    "details": [],
-                    "raw_lines": [],
+                    "instances": [],
                     "original_task_ids": set()
                 }
 
-            aggregated_ingredients[base_name]["amounts"].append({
+            aggregated_ingredients[base_name]["instances"].append({
+                "raw": raw_ing,
                 "quantity": norm["quantity"],
                 "unit": norm["unit"],
-                "source": recipe_name
+                "source": recipe_name,
+                "original_name": norm["name"]
             })
-            aggregated_ingredients[base_name]["details"].append(f"{raw_ing} (from {recipe_name})")
-            aggregated_ingredients[base_name]["raw_lines"].append(raw_ing)
             aggregated_ingredients[base_name]["original_task_ids"].add(task["id"])
 
     results = []
