@@ -12,6 +12,7 @@ import json
 from datetime import datetime
 from flask import Response, stream_with_context
 import database
+from fractions import Fraction
 
 # Load environment variables
 load_dotenv()
@@ -150,6 +151,122 @@ def get_ingredients_from_llm(recipe_name, session_id=None):
             database.log_event(session_id, "llm_error", {"recipe": recipe_name, "error": str(e)})
         return []
 
+UNIT_DATA = {
+    # Weight
+    "oz": ("weight", 1.0),
+    "ounce": ("weight", 1.0),
+    "ounces": ("weight", 1.0),
+    "lb": ("weight", 16.0),
+    "lbs": ("weight", 16.0),
+    "pound": ("weight", 16.0),
+    "pounds": ("weight", 16.0),
+    "kg": ("weight", 35.274),
+    "g": ("weight", 0.035274),
+    "gram": ("weight", 0.035274),
+    "grams": ("weight", 0.035274),
+
+    # Volume
+    "tsp": ("volume", 1.0),
+    "teaspoon": ("volume", 1.0),
+    "teaspoons": ("volume", 1.0),
+    "tbsp": ("volume", 3.0),
+    "tablespoon": ("volume", 3.0),
+    "tablespoons": ("volume", 3.0),
+    "cup": ("volume", 48.0),
+    "cups": ("volume", 48.0),
+    "ml": ("volume", 0.202884),
+    "l": ("volume", 202.884),
+    "liter": ("volume", 202.884),
+    "liters": ("volume", 202.884),
+    "pinch": ("volume", 0.125), # 1/8 tsp
+
+    # Count (default)
+    "clove": ("count", 1.0),
+    "cloves": ("count", 1.0),
+    "can": ("count", 1.0),
+    "cans": ("count", 1.0),
+    "slice": ("count", 1.0),
+    "slices": ("count", 1.0),
+    "head": ("count", 1.0),
+    "heads": ("count", 1.0),
+    "bag": ("count", 1.0),
+    "bags": ("count", 1.0),
+    "package": ("count", 1.0),
+    "packages": ("count", 1.0),
+    "bunch": ("count", 1.0),
+    "bunches": ("count", 1.0),
+    "jar": ("count", 1.0),
+    "jars": ("count", 1.0),
+}
+
+def get_unit_info(u):
+    if not u:
+        return ("count", 1.0)
+
+    u_lower = u.lower()
+    if u_lower in UNIT_DATA:
+        return UNIT_DATA[u_lower]
+
+    # Try singular/plural heuristic
+    if u_lower.endswith('s') and u_lower[:-1] in UNIT_DATA:
+        return UNIT_DATA[u_lower[:-1]]
+
+    return (u_lower, 1.0)
+
+def parse_quantity_str(q_str):
+    if not q_str:
+        return 1.0
+
+    q_str = q_str.strip()
+    try:
+        if " " in q_str:
+            parts = q_str.split()
+            if len(parts) == 2:
+                try:
+                    whole = float(parts[0])
+                    frac = float(Fraction(parts[1]))
+                    return whole + frac
+                except ValueError:
+                    pass
+
+        if "-" in q_str:
+            parts = q_str.split("-")
+            if len(parts) == 2:
+                try:
+                    v1 = float(Fraction(parts[0]))
+                    v2 = float(Fraction(parts[1]))
+                    return max(v1, v2)
+                except ValueError:
+                    pass
+
+        return float(Fraction(q_str))
+    except ValueError:
+        return 1.0
+
+def format_quantity(value, unit_type):
+    # Round to reasonable precision
+    if unit_type == "weight":
+        if value >= 16:
+            val = round(value / 16, 2)
+            return f"{val}".rstrip('0').rstrip('.'), "lb"
+        val = round(value, 2)
+        return f"{val}".rstrip('0').rstrip('.'), "oz"
+    elif unit_type == "volume":
+        if value >= 48:
+            val = round(value / 48, 2)
+            return f"{val}".rstrip('0').rstrip('.'), "cup"
+        if value >= 3:
+            val = round(value / 3, 2)
+            return f"{val}".rstrip('0').rstrip('.'), "tbsp"
+        val = round(value, 2)
+        return f"{val}".rstrip('0').rstrip('.'), "tsp"
+    else:
+        # Check if integer
+        if value.is_integer():
+            return f"{int(value)}", ""
+        val = round(value, 2)
+        return f"{val}".rstrip('0').rstrip('.'), ""
+
 def normalize_ingredient(text):
     """
     Heuristic to extract base name, quantity, and unit.
@@ -250,12 +367,24 @@ def process_tasks(tasks, session_id):
             })
 
             base_name = norm["name"]
+            q_val = parse_quantity_str(norm["quantity"])
+            u_type, u_factor = get_unit_info(norm["unit"])
+            base_q = q_val * u_factor
+
             if base_name not in aggregated_ingredients:
                 aggregated_ingredients[base_name] = {
+                    "base_name": base_name,
                     "name": base_name,
                     "instances": [],
-                    "original_task_ids": set()
+                    "original_task_ids": set(),
+                    "totals": {}
                 }
+
+            # Add to totals
+            totals = aggregated_ingredients[base_name]["totals"]
+            if u_type not in totals:
+                totals[u_type] = 0.0
+            totals[u_type] += base_q
 
             aggregated_ingredients[base_name]["instances"].append({
                 "raw": raw_ing,
@@ -269,6 +398,28 @@ def process_tasks(tasks, session_id):
     results = []
     for k, v in aggregated_ingredients.items():
         v["original_task_ids"] = list(v["original_task_ids"])
+
+        # Determine display name from totals
+        totals = v.pop("totals")
+        parts = []
+
+        for u_type, quantity in totals.items():
+            if u_type not in ["weight", "volume", "count"]:
+                 q_str, _ = format_quantity(quantity, "count")
+                 parts.append(f"{q_str} {u_type}")
+            else:
+                 q_str, u_str = format_quantity(quantity, u_type)
+                 if u_str:
+                     parts.append(f"{q_str} {u_str}")
+                 else:
+                     parts.append(f"{q_str}")
+
+        qty_part = ", ".join(parts)
+        if qty_part:
+             v["name"] = f"{qty_part} {v['base_name']}"
+        else:
+             v["name"] = v["base_name"]
+
         results.append(v)
 
     database.log_event(session_id, "aggregation", {"result": results})
