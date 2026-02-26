@@ -461,4 +461,5 @@ def create_grocery_list():
     return jsonify({"status": "success", "count": len(responses)})
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", debug=True)
+    debug = os.getenv("FLASK_DEBUG", "False").lower() == "true"
+    app.run(host="0.0.0.0", debug=debug)

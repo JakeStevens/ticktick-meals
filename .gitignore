@@ -7,3 +7,5 @@ ticktick/
 .DS_Store
 *.db
 *.jsonl
+*.db-wal
+*.db-shm
