@@ -313,6 +313,11 @@
 
                 // Update data
                 ingredientsQueue[currentIndex].name = newName;
+
+                // Update base_name to match the new title for consistent grouping
+                const normalized = normalizeIngredient(newName);
+                ingredientsQueue[currentIndex].base_name = normalized.name;
+
                 document.getElementById('ingredient-display').innerText = newName;
             }
 
@@ -367,14 +372,15 @@
             }
 
             const normalized = normalizeIngredient(newText);
+            const currentBaseName = group.base_name || group.name;
 
             // If name changed, move it
-            if (normalized.name !== group.name) {
+            if (normalized.name !== currentBaseName) {
                 // Remove from current
                 group.instances.splice(index, 1);
 
                 // Add to new group
-                let targetGroup = ingredientsQueue.find(g => g.name === normalized.name);
+                let targetGroup = ingredientsQueue.find(g => (g.base_name || g.name) === normalized.name);
                 const newInstance = {
                     raw: newText,
                     quantity: normalized.quantity,
@@ -389,6 +395,7 @@
                     // Create new group
                     ingredientsQueue.push({
                         name: normalized.name,
+                        base_name: normalized.name,
                         instances: [newInstance],
                         original_task_ids: []
                     });

@@ -12,6 +12,7 @@ class TestRejections(unittest.TestCase):
         self.app.testing = True
         self.rejections_file = "rejections.jsonl"
         self.test_db = "test_meal_planner_rejections.db"
+        database.close_db() # Close any existing connection to default DB
         database.DB_FILE = self.test_db
         database.init_db()
 
