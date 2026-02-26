@@ -13,6 +13,7 @@ class TestRejections(unittest.TestCase):
         self.rejections_file = "rejections.jsonl"
         self.test_db = "test_meal_planner_rejections.db"
         database.DB_FILE = self.test_db
+        database.close_db()
         database.init_db()
 
         if os.path.exists(self.rejections_file):
