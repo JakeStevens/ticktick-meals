@@ -572,22 +572,33 @@ def scan_meals():
 @app.route("/api/test_scan", methods=["POST"])
 def test_scan():
     data = request.json or {}
+    tasks_data = data.get("tasks", [])
     raw_text = data.get("text", "")
 
     def generate():
         session_id = database.create_session()
-        database.log_event(session_id, "start_test_scan", {"input_text": raw_text})
+        database.log_event(session_id, "start_test_scan", {"input_tasks": tasks_data, "input_text": raw_text})
 
         # Parse text into dummy tasks
-        lines = [l.strip() for l in raw_text.split('\n') if l.strip()]
         tasks = []
-        for i, line in enumerate(lines):
-            tasks.append({
-                "id": f"test-task-{i}",
-                "title": line,
-                "content": "",
-                "desc": ""
-            })
+
+        if tasks_data:
+            for i, task_data in enumerate(tasks_data):
+                tasks.append({
+                    "id": f"test-task-{i}",
+                    "title": task_data.get("title", ""),
+                    "content": "",
+                    "desc": task_data.get("desc", "")
+                })
+        else:
+            lines = [l.strip() for l in raw_text.split('\n') if l.strip()]
+            for i, line in enumerate(lines):
+                tasks.append({
+                    "id": f"test-task-{i}",
+                    "title": line,
+                    "content": "",
+                    "desc": ""
+                })
 
         yield from process_tasks(tasks, session_id)
 
