@@ -493,8 +493,8 @@
         }
 
         function handleYes() {
-            // Add the name of the ingredient group
-            selectedItems.push(ingredientsQueue[currentIndex].name);
+            // Store the full object for better auditing
+            selectedItems.push(JSON.parse(JSON.stringify(ingredientsQueue[currentIndex])));
             currentIndex++;
             showCurrentItem();
         }
@@ -575,27 +575,28 @@
             document.getElementById('loading-view').classList.remove('hidden');
             document.getElementById('loading-text').innerText = "Syncing to TickTick...";
 
-            const finalItems = [...selectedItems, ...manualItems];
+            const payload = {
+                items: selectedItems.map(i => i.name),
+                selected_objects: selectedItems,
+                manual_items: manualItems,
+                corrections: corrections,
+                rejected_items: rejectedItems,
+                output_list_name: config.outputList,
+                parent_task_name: config.parentTask,
+                session_id: sessionId,
+                test_mode: isTestMode
+            };
 
             try {
                 const response = await fetch('/api/create_grocery_list', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        items: finalItems,
-                        manual_items: manualItems,
-                        corrections: corrections,
-                        rejected_items: rejectedItems,
-                        output_list_name: config.outputList,
-                        parent_task_name: config.parentTask,
-                        session_id: sessionId,
-                        test_mode: isTestMode
-                    })
+                    body: JSON.stringify(payload)
                 });
                 
                 document.getElementById('loading-view').classList.add('hidden');
                 document.getElementById('success-view').classList.remove('hidden');
-                document.getElementById('count-added').innerText = finalItems.length;
+                document.getElementById('count-added').innerText = payload.items.length + manualItems.length;
             } catch (err) {
                 alert("Error creating list.");
             }

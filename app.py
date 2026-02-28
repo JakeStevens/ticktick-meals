@@ -570,8 +570,41 @@ def create_grocery_list():
         if session_id:
             database.log_event(session_id, "rejections", rejected_items)
 
+    # Audit Log: Record all selected items (including corrections)
     if session_id:
+        # First, mark session complete
         database.complete_session(session_id)
+
+        selected_objects = data.get("selected_objects", [])
+        
+        # 1. Approved items (including corrected ones if they are in selected_objects)
+        # We'll use the objects to get raw context
+        for obj in selected_objects:
+            final_name = obj.get('name')
+            base_name = obj.get('base_name')
+            
+            # Check if this was corrected (if name != what we think normalized was)
+            # Actually, the 'corrections' list is more explicit.
+            
+            for inst in obj.get('instances', []):
+                database.log_audit(
+                    session_id, 
+                    inst.get('raw'), 
+                    base_name, 
+                    final_name, 
+                    inst.get('source'), 
+                    "added_asis" if final_name not in [c['corrected_name'] for c in corrections] else "added_corrected"
+                )
+
+        # 2. Rejections
+        for rej in rejected_items:
+            # Rej context comes from the frontend as raw lines
+            for raw in rej.get('context', []):
+                database.log_audit(session_id, raw, rej.get('name'), rej.get('name'), "Unknown", f"rejected_{rej.get('reason')}")
+
+        # 3. Manual items
+        for item in manual_items:
+             database.log_audit(session_id, "N/A", item, item, "Manual Entry", "added_manual")
 
     if not selected_items:
         return jsonify({"status": "No items to add", "corrections_saved": len(corrections)})
