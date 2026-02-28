@@ -2,6 +2,10 @@
 
 A Python Flask application that integrates with the TickTick Open API to streamline meal planning and grocery shopping.
 
+## Persistence
+- **Database**: All sessions and audit logs are stored in `meal_planner.db`, which is mounted as a host volume.
+- **Logs**: Application logs are stored in `app.log`, which is mounted as a host volume.
+
 ## Features
 - **Recipe Scanning**: Scans a specified TickTick list (default: "Meals") for tasks containing recipe URLs.
 - **Ingredient Parsing**: Automatically extracts ingredients from recipes using `recipe-scrapers`.
