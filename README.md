@@ -3,8 +3,11 @@
 A Python Flask application that integrates with the TickTick Open API to streamline meal planning and grocery shopping.
 
 ## Persistence
-- **Database**: All sessions and audit logs are stored in `meal_planner.db`, which is mounted as a host volume.
-- **Logs**: Application logs are stored in `app.log`, which is mounted as a host volume.
+- **Database**: All sessions and audit logs are stored in an SQLite database (`meal_planner.db`), which is mounted as a host volume. The database schema includes:
+  - `sessions`: Tracks unique execution sessions (e.g. scan to grocery list creation).
+  - `logs`: Stores raw events (e.g., LLM prompts/responses, normalization steps, errors).
+  - `audit_log`: Records the final outcome for each ingredient instance (e.g. added as-is, corrected, rejected).
+- **Logs**: Application logs are stored in `app.log`, which is mounted as a host volume. Additionally, local JSONL files (`corrections.jsonl`, `rejections.jsonl`) record user corrections and skipped ingredients.
 
 ## Features
 - **Recipe Scanning**: Scans a specified TickTick list (default: "Week's Meal Ideas") for tasks containing recipe URLs.
@@ -109,6 +112,7 @@ The application operates as a linear pipeline that transforms TickTick tasks int
    ```bash
    python app.py
    ```
+   *Note: By default, the application runs with `debug=True`. Avoid exposing it directly to the public internet.*
 
 ## Headless / Tailscale Deployment
 If you are running this on a headless server (like a Raspberry Pi or VPS) and accessing via Tailscale:
