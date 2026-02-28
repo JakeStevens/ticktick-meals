@@ -81,6 +81,9 @@
             <div class="d-flex flex-column gap-2 mt-4">
                 <button onclick="handleYes()" class="btn btn-success btn-lg w-100 py-3 action-btn">Add to List ✅</button>
                 <div class="d-flex gap-2">
+                    <button onclick="handleSkip()" class="btn btn-warning w-100 py-2 action-btn">Skip ⏭️</button>
+                </div>
+                <div class="d-flex gap-2">
                     <button onclick="handleHaveIt()" class="btn btn-outline-secondary w-50 py-2 action-btn">Have it 🏠</button>
                     <button onclick="handleBadInfo()" class="btn btn-outline-danger w-50 py-2 action-btn">Bad Info 🚫</button>
                 </div>
@@ -540,6 +543,16 @@
             rejectedItems.push({
                 name: ingredientsQueue[currentIndex].name,
                 reason: "have_it",
+                context: ingredientsQueue[currentIndex].instances.map(i => i.raw)
+            });
+            currentIndex++;
+            showCurrentItem();
+        }
+
+        function handleSkip() {
+            rejectedItems.push({
+                name: ingredientsQueue[currentIndex].name,
+                reason: "user_skipped",
                 context: ingredientsQueue[currentIndex].instances.map(i => i.raw)
             });
             currentIndex++;
