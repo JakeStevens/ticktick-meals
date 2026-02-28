@@ -153,7 +153,7 @@ def get_ingredients_from_llm(recipe_name, session_id=None):
         print(f"LLM Error: {e}")
         if session_id:
             database.log_event(session_id, "llm_error", {"recipe": recipe_name, "error": str(e)})
-        return []
+        raise e
 
 UNIT_DATA = {
     # Weight
@@ -378,10 +378,22 @@ def process_tasks(tasks, session_id):
 
         if not scraped_successfully:
             yield f"data: {json.dumps({'status': f'[{i+1}/{total_tasks}] Asking LLM for: {title[:50]}...'})}\n\n"
-            recipe_ingredients = get_ingredients_from_llm(title, session_id=session_id)
+            try:
+                recipe_ingredients = get_ingredients_from_llm(title, session_id=session_id)
+                if not recipe_ingredients:
+                    # Check if it was a timeout/error vs just a "nothing needed" response
+                    # We can't easily check internal get_ingredients_from_llm state here 
+                    # without changing its return type, but we can check if it logged an error.
+                    pass
+            except Exception as e:
+                yield f"data: {json.dumps({'status': f'⚠️ LLM failed for {title[:30]}: {str(e)}'})}\n\n"
+                recipe_ingredients = []
 
         if not recipe_ingredients:
             skipped_meals.append(recipe_name)
+            # Notify user of skip
+            yield f"data: {json.dumps({'status': f'⏩ Skipping {recipe_name[:30]} (no ingredients found)'})}\n\n"
+            time.sleep(0.5) # Brief pause so they can see the skip status
 
         database.log_event(session_id, "raw_ingredients", {
             "recipe": recipe_name,
