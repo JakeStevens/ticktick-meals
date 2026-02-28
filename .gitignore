@@ -6,4 +6,6 @@ venv/
 ticktick/
 .DS_Store
 *.db
+*.db-shm
+*.db-wal
 *.jsonl
