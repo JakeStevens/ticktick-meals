@@ -267,6 +267,14 @@ def format_quantity(value, unit_type):
         val = round(value, 2)
         return f"{val}".rstrip('0').rstrip('.'), ""
 
+LIKELY_HAVE_KEYWORDS = {
+    "salt", "pepper", "black pepper", "kosher salt", "cooking oil", "olive oil", 
+    "vegetable oil", "butter", "unsalted butter", "water", "sugar", "brown sugar", 
+    "flour", "all-purpose flour", "garlic powder", "onion powder", "dried oregano", 
+    "dried basil", "dried thyme", "cayenne pepper", "paprika", "smoked paprika", 
+    "ground cumin", "chili powder", "soy sauce", "mayonnaise", "ketchup", "mustard"
+}
+
 def normalize_ingredient(text):
     """
     Heuristic to extract base name, quantity, and unit.
@@ -274,6 +282,14 @@ def normalize_ingredient(text):
     """
     original_text = text
     text = text.lower()
+
+    # Strip currency metadata (e.g., ($0.32))
+    text = re.sub(r'\(\$\d+\.\d+\)', '', text)
+
+    # Strip common markers like '*' or '(optional)'
+    text = text.replace('*', '')
+    text = re.sub(r'\(optional\)', '', text)
+
     text = re.sub(r'\(.*?\)', '', text).strip() # Remove text in parens
 
     # Common units/measurements to strip
@@ -377,7 +393,8 @@ def process_tasks(tasks, session_id):
                     "name": base_name,
                     "instances": [],
                     "original_task_ids": set(),
-                    "totals": {}
+                    "totals": {},
+                    "likely_have": base_name.lower() in LIKELY_HAVE_KEYWORDS
                 }
 
             # Add to totals
