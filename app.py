@@ -32,11 +32,21 @@ CLIENT_SECRET = os.getenv("TICKTICK_CLIENT_SECRET")
 REDIRECT_URI = "http://127.0.0.1:5000/callback"
 
 # LLM Config
-llm_client = OpenAI(
-    base_url=os.getenv("LLM_HOST"),
-    api_key="sk-no-key-required",
-    timeout=30.0
-)
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "default")
+if LLM_PROVIDER == "gemini":
+    llm_client = OpenAI(
+        api_key=os.getenv("GEMINI_API_KEY"),
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        timeout=30.0
+    )
+    LLM_MODEL = "gemini-3-flash-preview"
+else:
+    llm_client = OpenAI(
+        base_url=os.getenv("LLM_HOST"),
+        api_key="sk-no-key-required",
+        timeout=30.0
+    )
+    LLM_MODEL = "default"
 
 # Endpoints
 AUTH_URL = "https://ticktick.com/oauth/authorize"
@@ -130,7 +140,7 @@ def get_ingredients_from_llm(recipe_name, session_id=None):
 
     try:
         response = llm_client.chat.completions.create(
-            model="default", 
+            model=LLM_MODEL, 
             messages=[
                 {"role": "system", "content": "You are a helpful culinary assistant that provides high-level ingredient lists. If a dish doesn't require ingredients to be bought (like leftovers or takeout), you return nothing."},
                 {"role": "user", "content": prompt}
