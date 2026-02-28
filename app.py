@@ -301,6 +301,11 @@ def is_likely_have(name):
         # Use word boundaries to ensure 'garlic' doesn't match 'garlic powder'
         pattern = r'\b' + re.escape(kw) + r'\b'
         if re.search(pattern, name_lower):
+            # Special case: 'pepper' is a staple, but fresh varieties like 'bell pepper' are not.
+            if kw == "pepper":
+                fresh_peppers = ["bell", "chili", "chile", "jalapeno", "serrano", "habanero", "poblano", "sweet", "anaheim"]
+                if any(p in name_lower for p in fresh_peppers):
+                    continue
             return True
     return False
 
