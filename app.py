@@ -227,10 +227,16 @@ def parse_quantity_str(q_str):
             parts = q_str.split()
             if len(parts) == 2:
                 try:
-                    whole = float(parts[0])
-                    frac = float(Fraction(parts[1]))
-                    return whole + frac
-                except ValueError:
+                    # Mixed fraction check (e.g., "1 1/2")
+                    if "/" in parts[1]:
+                        whole = float(parts[0])
+                        frac = float(Fraction(parts[1]))
+                        return whole + frac
+                    else:
+                        # Likely two separate numbers (e.g., "1 15")
+                        # Default to the first one as quantity
+                        return float(parts[0])
+                except (ValueError, ZeroDivisionError):
                     pass
 
         if "-" in q_str:
@@ -281,9 +287,12 @@ LIKELY_HAVE_KEYWORDS = {
 
 def is_likely_have(name):
     name_lower = name.lower()
-    # Split name into words and check if any match keywords
-    words = re.findall(r'\w+', name_lower)
-    return any(word in LIKELY_HAVE_KEYWORDS for word in words)
+    for kw in LIKELY_HAVE_KEYWORDS:
+        # Use word boundaries to ensure 'garlic' doesn't match 'garlic powder'
+        pattern = r'\b' + re.escape(kw) + r'\b'
+        if re.search(pattern, name_lower):
+            return True
+    return False
 
 def normalize_ingredient(text):
     """
@@ -314,11 +323,26 @@ def normalize_ingredient(text):
 
     # Extract leading numbers/fractions/ranges
     quantity_match = re.match(r'^([\d\s\/\.\-]+)', text)
-    quantity = quantity_match.group(1).strip() if quantity_match else ""
-    
-    # Strip quantity from text
-    text = re.sub(r'^[\d\s\/\.\-]+', '', text).strip()
-    
+    if quantity_match:
+        quantity_raw = quantity_match.group(1)
+        # Refine quantity: if it ends with a number and contains a space,
+        # check if it's a mixed fraction (space followed by something with /)
+        if " " in quantity_raw.strip():
+            parts = quantity_raw.strip().split()
+            if len(parts) > 1 and "/" not in parts[-1]:
+                # The last number is likely part of the name (e.g. "1 15oz")
+                # Keep only the first part as quantity
+                quantity = parts[0]
+                text = text[len(parts[0]):].strip()
+            else:
+                quantity = quantity_raw.strip()
+                text = text[len(quantity_raw):].strip()
+        else:
+            quantity = quantity_raw.strip()
+            text = text[len(quantity_raw):].strip()
+    else:
+        quantity = ""
+
     words = text.split()
     unit = ""
     if words and words[0] in units:
