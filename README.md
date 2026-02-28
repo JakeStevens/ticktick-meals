@@ -7,18 +7,18 @@ A Python Flask application that integrates with the TickTick Open API to streaml
 - **Logs**: Application logs are stored in `app.log`, which is mounted as a host volume.
 
 ## Features
-- **Recipe Scanning**: Scans a specified TickTick list (default: "Meals") for tasks containing recipe URLs.
+- **Recipe Scanning**: Scans a specified TickTick list (default: "Week's Meal Ideas") for tasks containing recipe URLs.
 - **Ingredient Parsing**: Automatically extracts ingredients from recipes using `recipe-scrapers`.
 - **Smart Aggregation**: Groups similar ingredients (e.g., "1 cup flour" and "200g flour" -> "Flour") to prevent duplicates.
 - **Interactive Vetting**: A "Chatbot-style" web UI to approve or reject ingredients one by one.
-- **Grocery List Generation**: Adds approved items to a target TickTick list (default: "Inbox"), either as individual tasks or subtasks of a parent task.
+- **Grocery List Generation**: Adds approved items to a target TickTick list (default: "Groceries").
 
 ## System Design & Pipeline
 
 The application operates as a linear pipeline that transforms TickTick tasks into a curated grocery list.
 
 ### 1. Input (TickTick Tasks)
-- **Source**: A TickTick project (e.g., "Week's Meal Ideas") and a specific column (e.g., "Weekly Plan").
+- **Source**: A TickTick project (default: "Week's Meal Ideas") and a specific column (default: "Weekly Plan").
 - **Task Schema**:
   ```json
   {
@@ -41,25 +41,35 @@ The application operates as a linear pipeline that transforms TickTick tasks int
 - **Normalized Schema (Single Item)**:
   ```json
   {
-    "base_name": "flour",
+    "name": "flour",
     "quantity": "1",
-    "unit": "cup",
-    "raw_text": "1 cup of flour",
-    "source_task_id": "task_uuid_1"
+    "unit": "cup"
   }
   ```
 - **Aggregated Schema (Collection)**:
   ```json
   {
     "flour": {
-      "name": "flour",
-      "amounts": [
-        {"quantity": "1", "unit": "cup", "source": "Pizza"},
-        {"quantity": "200", "unit": "g", "source": "Bread"}
+      "base_name": "flour",
+      "name": "1 cup flour",
+      "instances": [
+        {
+          "raw": "1 cup of flour",
+          "quantity": "1",
+          "unit": "cup",
+          "source": "Pizza",
+          "original_name": "flour"
+        },
+        {
+          "raw": "200g flour",
+          "quantity": "200",
+          "unit": "g",
+          "source": "Bread",
+          "original_name": "flour"
+        }
       ],
-      "details": ["1 cup of flour (from Pizza)", "200g flour (from Bread)"],
-      "raw_lines": ["1 cup of flour", "200g flour"],
-      "original_task_ids": ["task_uuid_1", "task_uuid_2"]
+      "original_task_ids": ["task_uuid_1", "task_uuid_2"],
+      "likely_have": true
     }
   }
   ```
@@ -92,6 +102,7 @@ The application operates as a linear pipeline that transforms TickTick tasks int
 3. **Configuration**
    - Rename `.env.example` to `.env`.
    - Add your `TICKTICK_CLIENT_ID` and `TICKTICK_CLIENT_SECRET`.
+   - Set up LLM Configuration: Configure either `LLM_HOST` (e.g., local server) or set `LLM_PROVIDER=gemini` with `GEMINI_API_KEY`.
    - Ensure `REDIRECT_URI` matches your developer console (default: `http://127.0.0.1:5000/callback`).
 
 4. **Running**
@@ -116,6 +127,4 @@ If you are running this on a headless server (like a Raspberry Pi or VPS) and ac
 
 ## Usage
 1. Open the web interface.
-2. Enter your **Source List** name (e.g., "Meals") and **Target List** name (e.g., "Shopping").
-3. (Optional) Enter a **Parent Task Name** (e.g., "Grocery Run 10/25") to group items as subtasks.
-4. Click **Scan** to fetch recipes and review ingredients.
+2. Click **Start Scanning** to fetch recipes and review ingredients.
