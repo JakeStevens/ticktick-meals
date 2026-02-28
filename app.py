@@ -133,17 +133,22 @@ def callback():
         return f"Error logging in: {response.text}"
 
 def get_ingredients_from_llm(recipe_name, session_id=None):
-    prompt = f"List the ingredients required for a typical version of {recipe_name}. Keep the ingredients high level, things like spices can be assumed to be available. Provide the list as a simple bulleted list of ingredient names only. If the entry is something that doesn't need ingredients, such as 'left overs', 'freezer meal', 'takeout', 'Brassica', 'date night', or similar non-recipe items, return an empty response."
+    system_prompt = "You are a helpful culinary assistant. Provide only a simple bulleted list of high-level ingredient names. Do not include any Markdown code blocks, JSON formatting, or preamble/postamble. If no ingredients are needed, return an empty response."
+    user_prompt = f"List the ingredients required for a typical version of {recipe_name}. Keep the ingredients high level, things like spices can be assumed to be available. Provide the list as a simple bulleted list of ingredient names only. If the entry is something that doesn't need ingredients, such as 'left overs', 'freezer meal', 'takeout', 'Brassica', 'date night', or similar non-recipe items, return an empty response."
 
     if session_id:
-        database.log_event(session_id, "llm_prompt", {"recipe": recipe_name, "prompt": prompt})
+        database.log_event(session_id, "llm_prompt", {
+            "recipe": recipe_name, 
+            "user_prompt": user_prompt,
+            "system_prompt": system_prompt
+        })
 
     try:
         response = llm_client.chat.completions.create(
             model=LLM_MODEL, 
             messages=[
-                {"role": "system", "content": "You are a helpful culinary assistant that provides high-level ingredient lists. If a dish doesn't require ingredients to be bought (like leftovers or takeout), you return nothing."},
-                {"role": "user", "content": prompt}
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
             ]
         )
         content = response.choices[0].message.content
