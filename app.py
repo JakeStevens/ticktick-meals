@@ -34,7 +34,8 @@ REDIRECT_URI = "http://127.0.0.1:5000/callback"
 # LLM Config
 llm_client = OpenAI(
     base_url=os.getenv("LLM_HOST"),
-    api_key="sk-no-key-required"
+    api_key="sk-no-key-required",
+    timeout=30.0
 )
 
 # Endpoints
@@ -273,10 +274,16 @@ def format_quantity(value, unit_type):
 LIKELY_HAVE_KEYWORDS = {
     "salt", "pepper", "black pepper", "kosher salt", "cooking oil", "olive oil", 
     "vegetable oil", "butter", "unsalted butter", "water", "sugar", "brown sugar", 
-    "flour", "all-purpose flour", "garlic powder", "onion powder", "dried oregano", 
-    "dried basil", "dried thyme", "cayenne pepper", "paprika", "smoked paprika", 
-    "ground cumin", "chili powder", "soy sauce", "mayonnaise", "ketchup", "mustard"
+    "flour", "all-purpose flour", "garlic", "garlic powder", "onion powder", 
+    "oregano", "basil", "thyme", "cayenne", "paprika", "cumin", "chili powder", 
+    "soy sauce", "mayonnaise", "ketchup", "mustard", "stock", "broth", "vinegar"
 }
+
+def is_likely_have(name):
+    name_lower = name.lower()
+    # Split name into words and check if any match keywords
+    words = re.findall(r'\w+', name_lower)
+    return any(word in LIKELY_HAVE_KEYWORDS for word in words)
 
 def normalize_ingredient(text):
     """
@@ -321,7 +328,12 @@ def normalize_ingredient(text):
     if words and words[0] == "of":
         words.pop(0)
         
-    base_name = " ".join(words).strip()
+    # Strip common noise words from base name for better grouping
+    # Note: 'optional' is kept as requested
+    noise_words = {"chopped", "minced", "sliced", "diced", "freshly", "ground", "cracked"}
+    words = [w for w in words if w.strip(',.') not in noise_words]
+
+    base_name = " ".join(words).strip(',. ')
     
     # Fallback for strings that don't match the pattern well
     if not base_name:
@@ -397,7 +409,7 @@ def process_tasks(tasks, session_id):
                     "instances": [],
                     "original_task_ids": set(),
                     "totals": {},
-                    "likely_have": base_name.lower() in LIKELY_HAVE_KEYWORDS
+                    "likely_have": is_likely_have(base_name)
                 }
 
             # Add to totals
