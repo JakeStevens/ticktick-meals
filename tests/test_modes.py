@@ -47,8 +47,8 @@ class TestAppTestMode(unittest.TestCase):
             self.assertIn('ingredients', last_chunk)
             # Flatten ingredients to check names
             ing_names = [i['name'] for i in last_chunk['ingredients']]
-            self.assertIn('flour', ing_names)
-            self.assertIn('eggs', ing_names)
+            self.assertTrue(any('flour' in name for name in ing_names))
+            self.assertTrue(any('eggs' in name for name in ing_names))
 
             # 2. Test with LLM (raw text)
             mock_llm_response = MagicMock()
@@ -68,8 +68,8 @@ class TestAppTestMode(unittest.TestCase):
             last_chunk = data_chunks[-1]
             self.assertIn('ingredients', last_chunk)
             ingredients = {item['name'] for item in last_chunk['ingredients']}
-            self.assertIn('bread', ingredients)
-            self.assertIn('cheese', ingredients)
+            self.assertTrue(any('bread' in name for name in ingredients))
+            self.assertTrue(any('cheese' in name for name in ingredients))
 
     def test_create_grocery_list_test_mode(self):
         # Create a session

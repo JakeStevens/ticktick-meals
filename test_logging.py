@@ -149,5 +149,67 @@ class TestLogging(unittest.TestCase):
 
             conn.close()
 
+    def test_create_grocery_list_audit_logging(self):
+        session_id = database.create_session()
+
+        with patch('app.load_token') as mock_load_token, \
+             patch('app.requests.get') as mock_get, \
+             patch('app.requests.post') as mock_post:
+
+            mock_load_token.return_value = "fake_token"
+            with self.app.session_transaction() as sess:
+                sess['access_token'] = 'fake_token'
+
+            mock_get.return_value.status_code = 200
+            mock_get.return_value.json.return_value = [{"id": "inbox", "name": "Groceries"}]
+            mock_post.return_value.status_code = 200
+
+            payload = {
+                "items": ["Final Name", "Manual Item"],
+                "selected_objects": [
+                    {
+                        "name": "Final Name",
+                        "base_name": "base",
+                        "instances": [{"raw": "1 cup base", "source": "Recipe A"}]
+                    }
+                ],
+                "manual_items": ["Manual Item"],
+                "rejected_items": [
+                    {"name": "Rejected", "reason": "have_it", "context": ["1 rejected raw"]}
+                ],
+                "session_id": session_id
+            }
+
+            response = self.app.post('/api/create_grocery_list',
+                                     data=json.dumps(payload),
+                                     content_type='application/json')
+
+            self.assertEqual(response.status_code, 200)
+
+            # Verify audit_log entries
+            conn = sqlite3.connect(self.test_db)
+            c = conn.cursor()
+
+            # Check added_asis
+            c.execute("SELECT ingredient_raw, ingredient_final, outcome FROM audit_log WHERE session_id=? AND outcome='added_asis'", (session_id,))
+            row = c.fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row[0], "1 cup base")
+            self.assertEqual(row[1], "Final Name")
+
+            # Check rejected
+            c.execute("SELECT ingredient_raw, outcome FROM audit_log WHERE session_id=? AND outcome='rejected_have_it'", (session_id,))
+            row = c.fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row[0], "1 rejected raw")
+
+            # Check manual
+            c.execute("SELECT ingredient_final, outcome FROM audit_log WHERE session_id=? AND outcome='added_manual'", (session_id,))
+            row = c.fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row[0], "Manual Item")
+
+            conn.close()
+
 if __name__ == '__main__':
     unittest.main()

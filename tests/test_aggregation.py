@@ -1,10 +1,22 @@
 import unittest
 from unittest.mock import patch, MagicMock
 import json
+import os
 import app
 import database
 
 class TestAggregation(unittest.TestCase):
+    def setUp(self):
+        self.test_db = "test_agg.db"
+        database.DB_FILE = self.test_db
+        database.close_db()
+        database.init_db()
+
+    def tearDown(self):
+        database.close_db()
+        if os.path.exists(self.test_db):
+            os.remove(self.test_db)
+
     def test_process_tasks_instances_structure(self):
         # Setup dummy tasks
         tasks = [
@@ -55,6 +67,35 @@ class TestAggregation(unittest.TestCase):
             self.assertNotIn('amounts', first_group)
             self.assertNotIn('details', first_group)
             self.assertNotIn('raw_lines', first_group)
+
+    def test_normalize_ingredient_metadata_stripping(self):
+        # Test currency stripping
+        self.assertEqual(app.normalize_ingredient("1 onion ($0.32)")["name"], "onion")
+        # Test asterisk stripping
+        self.assertEqual(app.normalize_ingredient("1 cup flour*")["name"], "flour")
+        # Test (optional) stripping
+        self.assertEqual(app.normalize_ingredient("pinch salt (optional)")["name"], "salt")
+        # Test mixed
+        self.assertEqual(app.normalize_ingredient("1 Tbsp oil* ($0.02) (optional)")["name"], "oil")
+
+    def test_likely_have_flagging(self):
+        tasks = [{"id": "t1", "title": "Staples", "content": "", "desc": ""}]
+        with patch('app.get_ingredients_from_llm') as mock_llm:
+            mock_llm.return_value = ["salt", "chicken breast", "olive oil"]
+            generator = app.process_tasks(tasks, "s1")
+            results = []
+            for chunk in generator:
+                if chunk.startswith("data: "):
+                    data = json.loads(chunk[6:])
+                    if 'ingredients' in data:
+                        results = data['ingredients']
+            
+            # Convert results to map for easy lookup
+            res_map = {i['base_name']: i for i in results}
+            
+            self.assertTrue(res_map['salt']['likely_have'])
+            self.assertTrue(res_map['olive oil']['likely_have'])
+            self.assertFalse(res_map['chicken breast']['likely_have'])
 
 if __name__ == '__main__':
     unittest.main()

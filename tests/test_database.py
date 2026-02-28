@@ -29,6 +29,23 @@ class TestDatabase(unittest.TestCase):
         self.assertIsNotNone(c.fetchone())
         c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='logs'")
         self.assertIsNotNone(c.fetchone())
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='audit_log'")
+        self.assertIsNotNone(c.fetchone())
+        conn.close()
+
+    def test_log_audit(self):
+        session_id = database.create_session()
+        database.log_audit(session_id, "1 cup raw", "raw", "final", "recipe", "added_asis")
+
+        conn = sqlite3.connect(self.test_db)
+        c = conn.cursor()
+        c.execute("SELECT ingredient_raw, ingredient_normalized, ingredient_final, source_recipe, outcome FROM audit_log WHERE session_id=?", (session_id,))
+        row = c.fetchone()
+        self.assertEqual(row[0], "1 cup raw")
+        self.assertEqual(row[1], "raw")
+        self.assertEqual(row[2], "final")
+        self.assertEqual(row[3], "recipe")
+        self.assertEqual(row[4], "added_asis")
         conn.close()
 
     def test_create_session(self):
