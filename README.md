@@ -132,3 +132,4 @@ If you are running this on a headless server (like a Raspberry Pi or VPS) and ac
 ## Usage
 1. Open the web interface.
 2. Click **Start Scanning** to fetch recipes and review ingredients.
+   *Note: You can also use **Test Mode** from the main page to paste recipes or URLs manually without needing them to be in TickTick first.*
