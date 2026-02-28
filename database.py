@@ -1,10 +1,11 @@
+import os
 import sqlite3
 import json
 import uuid
 import threading
 from datetime import datetime
 
-DB_FILE = "meal_planner.db"
+DB_FILE = os.getenv("DB_PATH", "meal_planner.db")
 _local = threading.local()
 
 def get_connection():
