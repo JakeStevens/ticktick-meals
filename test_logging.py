@@ -16,6 +16,7 @@ class TestLogging(unittest.TestCase):
         # Initialize the DB
         database.init_db()
 
+        app.app.config['WTF_CSRF_ENABLED'] = False
         self.app = app.app.test_client()
         self.app.testing = True
 

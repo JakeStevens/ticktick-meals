@@ -4,12 +4,12 @@ import unittest
 import json
 
 # Mock missing dependencies before importing app
-mock_flask = MagicMock()
-sys.modules["flask"] = mock_flask
-sys.modules["requests"] = MagicMock()
-sys.modules["recipe_scrapers"] = MagicMock()
-sys.modules["dotenv"] = MagicMock()
-sys.modules["openai"] = MagicMock()
+# mock_flask = MagicMock()
+# sys.modules["flask"] = mock_flask
+# sys.modules["requests"] = MagicMock()
+# sys.modules["recipe_scrapers"] = MagicMock()
+# sys.modules["dotenv"] = MagicMock()
+# sys.modules["openai"] = MagicMock()
 
 # Now we can import load_token from app
 from app import load_token, TOKEN_FILE

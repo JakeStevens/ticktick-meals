@@ -12,6 +12,7 @@ class TestAppTestMode(unittest.TestCase):
         database.DB_FILE = self.test_db
         database.close_db()
         database.init_db()
+        app.app.config['WTF_CSRF_ENABLED'] = False
         self.app = app.app.test_client()
         self.app.testing = True
 

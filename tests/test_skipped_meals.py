@@ -8,8 +8,8 @@ sys.modules['database'] = MagicMock()
 sys.modules['database'].create_session.return_value = 'test_session_id'
 
 # We also need to mock openai and recipe_scrapers if they try to do things on import or init
-sys.modules['openai'] = MagicMock()
-sys.modules['recipe_scrapers'] = MagicMock()
+# sys.modules['openai'] = MagicMock()
+# sys.modules['recipe_scrapers'] = MagicMock()
 
 # Now import app
 import app
@@ -42,6 +42,7 @@ class TestSkippedMeals(unittest.TestCase):
 
         mock_get.side_effect = [mock_project_response, mock_tasks_response]
 
+        app.app.config['WTF_CSRF_ENABLED'] = False
         # Setup request context
         with app.app.test_client() as client:
             with client.session_transaction() as sess:
