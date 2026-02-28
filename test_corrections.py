@@ -6,6 +6,7 @@ from app import app
 
 class TestCorrections(unittest.TestCase):
     def setUp(self):
+        app.config['WTF_CSRF_ENABLED'] = False
         self.app = app.test_client()
         self.app.testing = True
         self.corrections_file = "corrections.jsonl"

@@ -13,12 +13,14 @@ from datetime import datetime
 from flask import Response, stream_with_context
 import database
 from fractions import Fraction
+from flask_wtf.csrf import CSRFProtect
 
 # Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(16)
+csrf = CSRFProtect(app)
 
 # Initialize DB
 try:

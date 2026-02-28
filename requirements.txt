@@ -3,3 +3,4 @@ requests
 recipe-scrapers
 python-dotenv
 openai
+Flask-WTF
