@@ -43,12 +43,28 @@
         </div>
 
         <!-- Test Input View -->
-        <div id="test-input-view" class="card mx-auto hidden">
+        <div id="test-input-view" class="card mx-auto hidden" style="max-height: 80vh; overflow-y: auto;">
             <h2>Test Mode</h2>
-            <p>Enter recipes or URLs (one per line):</p>
-            <textarea id="test-input-text" class="form-control mb-3" rows="10" placeholder="https://example.com/recipe&#10;Chicken Parmesan"></textarea>
-            <button onclick="startTestScan()" class="btn btn-primary btn-lg">Run Test</button>
-            <button onclick="location.reload()" class="btn btn-outline-secondary mt-2">Cancel</button>
+            <p>Enter task titles (recipes or URLs) and optional descriptions:</p>
+
+            <div id="test-tasks-container" class="mb-3 text-start">
+                <div class="test-task-block border rounded p-3 mb-2 position-relative bg-white">
+                    <button class="btn btn-sm btn-outline-danger position-absolute top-0 end-0 m-2 remove-task-btn hidden" onclick="removeTestTask(this)">X</button>
+                    <div class="mb-2">
+                        <label class="form-label fw-bold mb-1 small">Task Title (Recipe Name or URL)</label>
+                        <input type="text" class="form-control test-task-title" placeholder="Chicken Parmesan or https://example.com/recipe">
+                    </div>
+                    <div>
+                        <label class="form-label fw-bold mb-1 small">Description (Optional text or URLs)</label>
+                        <textarea class="form-control test-task-desc" rows="2" placeholder="Ingredients list or extra links..."></textarea>
+                    </div>
+                </div>
+            </div>
+
+            <button onclick="addTestTask()" class="btn btn-outline-success mb-3 w-100">+ Add Another Task</button>
+
+            <button onclick="startTestScan()" class="btn btn-primary btn-lg w-100">Run Test</button>
+            <button onclick="location.reload()" class="btn btn-outline-secondary mt-2 w-100">Cancel</button>
         </div>
 
         <!-- Loading View -->
@@ -242,10 +258,56 @@
             document.getElementById('test-input-view').classList.remove('hidden');
         }
 
+        function addTestTask() {
+            const container = document.getElementById('test-tasks-container');
+            const newBlock = document.createElement('div');
+            newBlock.className = 'test-task-block border rounded p-3 mb-2 position-relative bg-white';
+            newBlock.innerHTML = `
+                <button class="btn btn-sm btn-outline-danger position-absolute top-0 end-0 m-2 remove-task-btn" onclick="removeTestTask(this)">X</button>
+                <div class="mb-2">
+                    <label class="form-label fw-bold mb-1 small">Task Title (Recipe Name or URL)</label>
+                    <input type="text" class="form-control test-task-title" placeholder="Chicken Parmesan or https://example.com/recipe">
+                </div>
+                <div>
+                    <label class="form-label fw-bold mb-1 small">Description (Optional text or URLs)</label>
+                    <textarea class="form-control test-task-desc" rows="2" placeholder="Ingredients list or extra links..."></textarea>
+                </div>
+            `;
+            container.appendChild(newBlock);
+            updateRemoveButtons();
+        }
+
+        function removeTestTask(btn) {
+            btn.closest('.test-task-block').remove();
+            updateRemoveButtons();
+        }
+
+        function updateRemoveButtons() {
+            const blocks = document.querySelectorAll('.test-task-block');
+            blocks.forEach(block => {
+                const btn = block.querySelector('.remove-task-btn');
+                if (blocks.length > 1) {
+                    btn.classList.remove('hidden');
+                } else {
+                    btn.classList.add('hidden');
+                }
+            });
+        }
+
         async function startTestScan() {
-            const text = document.getElementById('test-input-text').value;
-            if (!text.trim()) {
-                alert("Please enter some text.");
+            const blocks = document.querySelectorAll('.test-task-block');
+            const tasks = [];
+
+            blocks.forEach(block => {
+                const title = block.querySelector('.test-task-title').value.trim();
+                const desc = block.querySelector('.test-task-desc').value.trim();
+                if (title || desc) {
+                    tasks.push({ title, desc });
+                }
+            });
+
+            if (tasks.length === 0) {
+                alert("Please enter at least one task title or description.");
                 return;
             }
 
@@ -258,7 +320,7 @@
                 const response = await fetch('/api/test_scan', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text: text })
+                    body: JSON.stringify({ tasks: tasks })
                 });
 
                 await handleScanResponse(response);
