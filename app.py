@@ -132,9 +132,12 @@ def callback():
     else:
         return f"Error logging in: {response.text}"
 
-def get_ingredients_from_llm(recipe_name, session_id=None):
+def get_ingredients_from_llm(recipe_name, session_id=None, ignore_recipe=None):
     system_prompt = "You are a helpful culinary assistant. Provide only a simple bulleted list of high-level ingredient names. Do not include any Markdown code blocks, JSON formatting, or preamble/postamble. If no ingredients are needed, return an empty response."
     user_prompt = f"List the ingredients required for a typical version of {recipe_name}. Keep the ingredients high level, things like spices can be assumed to be available. Provide the list as a simple bulleted list of ingredient names only. If the entry is something that doesn't need ingredients, such as 'left overs', 'freezer meal', 'takeout', 'Brassica', 'date night', or similar non-recipe items, return an empty response."
+
+    if ignore_recipe:
+        user_prompt += f" Ignore the ingredients for {ignore_recipe} since its ingredients are extracted separately."
 
     if session_id:
         database.log_event(session_id, "llm_prompt", {
@@ -394,16 +397,21 @@ def process_tasks(tasks, session_id):
     aggregated_ingredients = {}
     skipped_meals = []
 
+    days_pattern = re.compile(r'\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\b[:\-]?\s*', re.IGNORECASE)
+
     for i, task in enumerate(tasks):
         title = task.get("title", "")
         content = task.get("content", "")
         desc = task.get("desc", "")
         all_text = f"{title} {content} {desc}"
+
+        all_text = days_pattern.sub('', all_text)
         urls = URL_PATTERN.findall(all_text)
 
         recipe_ingredients = []
         recipe_name = title
         scraped_successfully = False
+        scraped_title = None
 
         if urls:
             yield f"data: {json.dumps({'status': f'[{i+1}/{total_tasks}] Scraping recipe: {title[:50]}...'})}\n\n"
@@ -413,25 +421,30 @@ def process_tasks(tasks, session_id):
                     scraper = scrape_me(clean_url)
                     ings = scraper.ingredients()
                     if ings:
-                        recipe_ingredients.extend(ings)
-                        recipe_name = scraper.title()
+                        scraped_title = scraper.title()
+                        for ing in ings:
+                            recipe_ingredients.append({"raw": ing, "source": scraped_title, "type": "scrape"})
+                        recipe_name = scraped_title
                         scraped_successfully = True
                         break
                 except Exception as e:
                     print(f"Failed to scrape {url}: {e}")
 
-        if not scraped_successfully:
-            yield f"data: {json.dumps({'status': f'[{i+1}/{total_tasks}] Asking LLM for: {title[:50]}...'})}\n\n"
+        # Extract remaining text after scraping URLs
+        remaining_text = all_text
+        for url in urls:
+            remaining_text = remaining_text.replace(url, "")
+        remaining_text = remaining_text.strip('., :-\t\n\r')
+
+        if remaining_text:
+            yield f"data: {json.dumps({'status': f'[{i+1}/{total_tasks}] Asking LLM for: {remaining_text[:50]}...'})}\n\n"
             try:
-                recipe_ingredients = get_ingredients_from_llm(title, session_id=session_id)
-                if not recipe_ingredients:
-                    # Check if it was a timeout/error vs just a "nothing needed" response
-                    # We can't easily check internal get_ingredients_from_llm state here 
-                    # without changing its return type, but we can check if it logged an error.
-                    pass
+                llm_ings = get_ingredients_from_llm(remaining_text, session_id=session_id, ignore_recipe=scraped_title if scraped_successfully else None)
+                if llm_ings:
+                    for ing in llm_ings:
+                        recipe_ingredients.append({"raw": ing, "source": f"LLM: {remaining_text[:30]}", "type": "llm"})
             except Exception as e:
-                yield f"data: {json.dumps({'status': f'⚠️ LLM failed for {title[:30]}: {str(e)}'})}\n\n"
-                recipe_ingredients = []
+                yield f"data: {json.dumps({'status': f'⚠️ LLM failed for {remaining_text[:30]}: {str(e)}'})}\n\n"
 
         if not recipe_ingredients:
             skipped_meals.append(recipe_name)
@@ -439,13 +452,23 @@ def process_tasks(tasks, session_id):
             yield f"data: {json.dumps({'status': f'⏩ Skipping {recipe_name[:30]} (no ingredients found)'})}\n\n"
             time.sleep(0.5) # Brief pause so they can see the skip status
 
+        types = list(set(i['type'] for i in recipe_ingredients))
+        if len(types) > 1:
+            source_type = "mixed"
+        elif types:
+            source_type = types[0]
+        else:
+            source_type = "unknown"
+
         database.log_event(session_id, "raw_ingredients", {
             "recipe": recipe_name,
-            "source": "scrape" if scraped_successfully else "llm",
-            "ingredients": recipe_ingredients
+            "source": source_type,
+            "ingredients": [i["raw"] for i in recipe_ingredients]
         })
 
-        for raw_ing in recipe_ingredients:
+        for item in recipe_ingredients:
+            raw_ing = item["raw"]
+            source_name = item["source"]
             norm = normalize_ingredient(raw_ing)
 
             database.log_event(session_id, "normalization", {
@@ -478,7 +501,7 @@ def process_tasks(tasks, session_id):
                 "raw": raw_ing,
                 "quantity": norm["quantity"],
                 "unit": norm["unit"],
-                "source": recipe_name,
+                "source": source_name,
                 "original_name": norm["name"]
             })
             aggregated_ingredients[base_name]["original_task_ids"].add(task["id"])
