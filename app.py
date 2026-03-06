@@ -19,6 +19,8 @@ from pint import UnitRegistry
 
 # Initialize Pint unit registry
 ureg = UnitRegistry()
+# Define a base unit for simple counts
+ureg.define('count = [count]')
 # Define some common culinary units that might not be in default pint or need aliases
 ureg.define('pinch = 0.0625 * teaspoon')
 ureg.define('dash = 0.125 * teaspoon')
