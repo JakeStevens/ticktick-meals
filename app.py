@@ -15,6 +15,21 @@ from datetime import datetime
 from flask import Response, stream_with_context
 import database
 from fractions import Fraction
+from pint import UnitRegistry
+
+# Initialize Pint unit registry
+ureg = UnitRegistry()
+# Define some common culinary units that might not be in default pint or need aliases
+ureg.define('pinch = 0.0625 * teaspoon')
+ureg.define('dash = 0.125 * teaspoon')
+ureg.define('clove = 1 * count') # garlic cloves
+ureg.define('can = 1 * count')
+ureg.define('jar = 1 * count')
+ureg.define('package = 1 * count')
+ureg.define('bunch = 1 * count')
+ureg.define('head = 1 * count')
+ureg.define('bag = 1 * count')
+ureg.define('slice = 1 * count')
 
 # Load environment variables
 load_dotenv()
@@ -136,7 +151,7 @@ def callback():
 
 def get_ingredients_from_llm(recipe_name, session_id=None, ignore_recipe=None):
     system_prompt = "You are a helpful culinary assistant. Provide only a simple bulleted list of high-level ingredient names. Do not include any Markdown code blocks, JSON formatting, or preamble/postamble. If no ingredients are needed, return an empty response."
-    user_prompt = f"List the ingredients required for a typical version of {recipe_name}. Keep the ingredients high level, things like spices can be assumed to be available. Provide the list as a simple bulleted list of ingredient names only. If the entry is something that doesn't need ingredients, such as 'left overs', 'freezer meal', 'takeout', 'Brassica', 'date night', or similar non-recipe items, return an empty response."
+    user_prompt = f"List the ingredients required for a typical version of {recipe_name}. Keep the ingredients high level, things like spices can be assumed to be available. Provide the list as a simple bulleted list of ingredient names only. If the entry is something that doesn't need ingredients, such as 'left overs', 'freezer meal', 'takeout', 'Brassica', 'date night', or similar non-recipe items, return an empty response. IMPORTANT: If the item itself is a 'prepped' dish that can be considered a single ingredient (e.g., 'Risotto', 'Mac n Cheese', 'Frozen Pizza', 'Salad Kit'), simply return that item name as the sole ingredient."
 
     if ignore_recipe:
         user_prompt += f" Ignore the ingredients for {ignore_recipe} since its ingredients are extracted separately."
@@ -177,127 +192,73 @@ def get_ingredients_from_llm(recipe_name, session_id=None, ignore_recipe=None):
             database.log_event(session_id, "llm_error", {"recipe": recipe_name, "error": str(e)})
         raise e
 
-UNIT_DATA = {
-    # Weight
-    "oz": ("weight", 1.0),
-    "ounce": ("weight", 1.0),
-    "ounces": ("weight", 1.0),
-    "lb": ("weight", 16.0),
-    "lbs": ("weight", 16.0),
-    "pound": ("weight", 16.0),
-    "pounds": ("weight", 16.0),
-    "kg": ("weight", 35.274),
-    "g": ("weight", 0.035274),
-    "gram": ("weight", 0.035274),
-    "grams": ("weight", 0.035274),
+def normalize_ingredient(text, session_id=None):
+    """
+    Use LLM to extract base name, quantity, and unit.
+    """
+    system_prompt = (
+        "You are a culinary data specialist. Your task is to normalize raw ingredient strings into a structured JSON format. "
+        "Extract the 'name', 'quantity', and 'unit'. \n"
+        "Guidelines:\n"
+        "- 'name': The base ingredient (e.g., 'onion', 'chicken breast'). Remove preparation adjectives like 'chopped', 'diced' unless they are essential to the identity of the item.\n"
+        "- 'quantity': A numeric string (e.g., '1', '0.5', '1 1/2'). If no quantity is specified, use '1'.\n"
+        "- 'unit': A standard culinary unit (e.g., 'cup', 'oz', 'gram', 'clove', 'can', 'bunch'). If it is a simple count, use 'count'.\n"
+        "Return ONLY the JSON object."
+    )
+    
+    user_prompt = f"Normalize this ingredient: \"{text}\""
 
-    # Volume
-    "tsp": ("volume", 1.0),
-    "teaspoon": ("volume", 1.0),
-    "teaspoons": ("volume", 1.0),
-    "tbsp": ("volume", 3.0),
-    "tablespoon": ("volume", 3.0),
-    "tablespoons": ("volume", 3.0),
-    "cup": ("volume", 48.0),
-    "cups": ("volume", 48.0),
-    "ml": ("volume", 0.202884),
-    "l": ("volume", 202.884),
-    "liter": ("volume", 202.884),
-    "liters": ("volume", 202.884),
-    "pinch": ("volume", 0.125), # 1/8 tsp
-
-    # Count (default)
-    "clove": ("count", 1.0),
-    "cloves": ("count", 1.0),
-    "can": ("count", 1.0),
-    "cans": ("count", 1.0),
-    "slice": ("count", 1.0),
-    "slices": ("count", 1.0),
-    "head": ("count", 1.0),
-    "heads": ("count", 1.0),
-    "bag": ("count", 1.0),
-    "bags": ("count", 1.0),
-    "package": ("count", 1.0),
-    "packages": ("count", 1.0),
-    "bunch": ("count", 1.0),
-    "bunches": ("count", 1.0),
-    "jar": ("count", 1.0),
-    "jars": ("count", 1.0),
-}
-
-def get_unit_info(u):
-    if not u:
-        return ("count", 1.0)
-
-    u_lower = u.lower()
-    if u_lower in UNIT_DATA:
-        return UNIT_DATA[u_lower]
-
-    # Try singular/plural heuristic
-    if u_lower.endswith('s') and u_lower[:-1] in UNIT_DATA:
-        return UNIT_DATA[u_lower[:-1]]
-
-    return (u_lower, 1.0)
-
-def parse_quantity_str(q_str):
-    if not q_str:
-        return 1.0
-
-    q_str = q_str.strip()
     try:
-        if " " in q_str:
-            parts = q_str.split()
-            if len(parts) == 2:
-                try:
-                    # Mixed fraction check (e.g., "1 1/2")
-                    if "/" in parts[1]:
-                        whole = float(parts[0])
-                        frac = float(Fraction(parts[1]))
-                        return whole + frac
-                    else:
-                        # Likely two separate numbers (e.g., "1 15")
-                        # Default to the first one as quantity
-                        return float(parts[0])
-                except (ValueError, ZeroDivisionError):
-                    pass
+        response = llm_client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            response_format={"type": "json_object"}
+        )
+        norm = json.loads(response.choices[0].message.content)
+        # Ensure keys exist
+        return {
+            "name": str(norm.get("name", text)),
+            "quantity": str(norm.get("quantity", "1")),
+            "unit": str(norm.get("unit", "count"))
+        }
+    except Exception as e:
+        print(f"Normalization LLM Error: {e}")
+        # Simple regex fallback if LLM fails
+        return {"name": text, "quantity": "1", "unit": "count"}
 
-        if "-" in q_str:
-            parts = q_str.split("-")
-            if len(parts) == 2:
-                try:
-                    v1 = float(Fraction(parts[0]))
-                    v2 = float(Fraction(parts[1]))
-                    return max(v1, v2)
-                except ValueError:
-                    pass
-
-        return float(Fraction(q_str))
-    except ValueError:
-        return 1.0
-
-def format_quantity(value, unit_type):
-    # Round to reasonable precision
-    if unit_type == "weight":
-        if value >= 16:
-            val = round(value / 16, 2)
-            return f"{val}".rstrip('0').rstrip('.'), "lb"
-        val = round(value, 2)
-        return f"{val}".rstrip('0').rstrip('.'), "oz"
-    elif unit_type == "volume":
-        if value >= 48:
-            val = round(value / 48, 2)
-            return f"{val}".rstrip('0').rstrip('.'), "cup"
-        if value >= 3:
-            val = round(value / 3, 2)
-            return f"{val}".rstrip('0').rstrip('.'), "tbsp"
-        val = round(value, 2)
-        return f"{val}".rstrip('0').rstrip('.'), "tsp"
-    else:
-        # Check if integer
-        if value.is_integer():
-            return f"{int(value)}", ""
-        val = round(value, 2)
-        return f"{val}".rstrip('0').rstrip('.'), ""
+def format_quantity(quantity_obj):
+    """Formats a Pint Quantity object into a readable string and unit."""
+    try:
+        # If it's a volume, try to simplify to cups/tbsp/tsp
+        if quantity_obj.check('[volume]'):
+            if quantity_obj >= ureg.cup:
+                val = quantity_obj.to(ureg.cup)
+                return f"{round(val.magnitude, 2)}".rstrip('0').rstrip('.'), "cup"
+            if quantity_obj >= ureg.tablespoon:
+                val = quantity_obj.to(ureg.tablespoon)
+                return f"{round(val.magnitude, 2)}".rstrip('0').rstrip('.'), "tbsp"
+            val = quantity_obj.to(ureg.teaspoon)
+            return f"{round(val.magnitude, 2)}".rstrip('0').rstrip('.'), "tsp"
+        
+        # If it's a weight, try to simplify to lbs/oz
+        if quantity_obj.check('[mass]'):
+            if quantity_obj >= ureg.pound:
+                val = quantity_obj.to(ureg.pound)
+                return f"{round(val.magnitude, 2)}".rstrip('0').rstrip('.'), "lb"
+            val = quantity_obj.to(ureg.ounce)
+            return f"{round(val.magnitude, 2)}".rstrip('0').rstrip('.'), "oz"
+            
+        # Default fallback
+        m = round(quantity_obj.magnitude, 2)
+        m_str = f"{m}".rstrip('0').rstrip('.')
+        u_str = str(quantity_obj.units)
+        if u_str == "count": u_str = ""
+        return m_str, u_str
+    except:
+        return str(round(quantity_obj.magnitude, 2)), str(quantity_obj.units)
 
 LIKELY_HAVE_KEYWORDS = {
     "salt", "pepper", "black pepper", "kosher salt", "cooking oil", "olive oil", 
@@ -310,91 +271,14 @@ LIKELY_HAVE_KEYWORDS = {
 def is_likely_have(name):
     name_lower = name.lower()
     for kw in LIKELY_HAVE_KEYWORDS:
-        # Use word boundaries to ensure 'garlic' doesn't match 'garlic powder'
         pattern = r'\b' + re.escape(kw) + r'\b'
         if re.search(pattern, name_lower):
-            # Special case: 'pepper' is a staple, but fresh varieties like 'bell pepper' are not.
             if kw == "pepper":
                 fresh_peppers = ["bell", "chili", "chile", "jalapeno", "serrano", "habanero", "poblano", "sweet", "anaheim"]
                 if any(p in name_lower for p in fresh_peppers):
                     continue
             return True
     return False
-
-def normalize_ingredient(text):
-    """
-    Heuristic to extract base name, quantity, and unit.
-    Returns a dict: {'name': str, 'quantity': str, 'unit': str}
-    """
-    original_text = text
-    text = text.lower()
-
-    # Strip currency metadata (e.g., ($0.32))
-    text = re.sub(r'\(\$\d+\.\d+\)', '', text)
-
-    # Strip common markers like '*' or '(optional)'
-    text = text.replace('*', '')
-    text = re.sub(r'\(optional\)', '', text)
-
-    text = re.sub(r'\(.*?\)', '', text).strip() # Remove text in parens
-
-    # Common units/measurements to strip
-    units = [
-        "cup", "cups", "tbsp", "tsp", "tablespoon", "teaspoon", 
-        "oz", "ounce", "ounces", "lb", "lbs", "pound", "pounds", 
-        "g", "gram", "grams", "kg", "ml", "l", "liter", "pinch", 
-        "slice", "slices", "clove", "cloves", "can", "cans", "jar", "jars",
-        "package", "packages", "bunch", "bunches", "large", "small", "medium",
-        "head", "heads", "bag", "bags"
-    ]
-
-    # Extract leading numbers/fractions/ranges
-    quantity_match = re.match(r'^([\d\s\/\.\-]+)', text)
-    if quantity_match:
-        quantity_raw = quantity_match.group(1)
-        # Refine quantity: if it ends with a number and contains a space,
-        # check if it's a mixed fraction (space followed by something with /)
-        if " " in quantity_raw.strip():
-            parts = quantity_raw.strip().split()
-            if len(parts) > 1 and "/" not in parts[-1]:
-                # The last number is likely part of the name (e.g. "1 15oz")
-                # Keep only the first part as quantity
-                quantity = parts[0]
-                text = text[len(parts[0]):].strip()
-            else:
-                quantity = quantity_raw.strip()
-                text = text[len(quantity_raw):].strip()
-        else:
-            quantity = quantity_raw.strip()
-            text = text[len(quantity_raw):].strip()
-    else:
-        quantity = ""
-
-    words = text.split()
-    unit = ""
-    if words and words[0] in units:
-        unit = words.pop(0)
-    
-    # Check for "of" (e.g., "1 cup of flour")
-    if words and words[0] == "of":
-        words.pop(0)
-        
-    # Strip common noise words from base name for better grouping
-    # Note: 'optional' is kept as requested
-    noise_words = {"chopped", "minced", "sliced", "diced", "freshly", "ground", "cracked"}
-    words = [w for w in words if w.strip(',.') not in noise_words]
-
-    base_name = " ".join(words).strip(',. ')
-    
-    # Fallback for strings that don't match the pattern well
-    if not base_name:
-        base_name = original_text
-
-    return {
-        "name": base_name,
-        "quantity": quantity,
-        "unit": unit
-    }
 
 def process_tasks(tasks, session_id):
     total_tasks = len(tasks)
@@ -473,7 +357,7 @@ def process_tasks(tasks, session_id):
         for item in recipe_ingredients:
             raw_ing = item["raw"]
             source_name = item["source"]
-            norm = normalize_ingredient(raw_ing)
+            norm = normalize_ingredient(raw_ing, session_id=session_id)
 
             database.log_event(session_id, "normalization", {
                 "input": raw_ing,
@@ -481,9 +365,26 @@ def process_tasks(tasks, session_id):
             })
 
             base_name = norm["name"]
-            q_val = parse_quantity_str(norm["quantity"])
-            u_type, u_factor = get_unit_info(norm["unit"])
-            base_q = q_val * u_factor
+            
+            # Create Pint quantity
+            try:
+                # Handle fractions or ranges in quantity via a simple evaluator or Pint's parsing
+                qty_str = norm["quantity"]
+                if "/" in qty_str and " " in qty_str:
+                    parts = qty_str.split()
+                    qty_val = float(parts[0]) + float(Fraction(parts[1]))
+                elif "/" in qty_str:
+                    qty_val = float(Fraction(qty_str))
+                elif "-" in qty_str:
+                    qty_val = float(qty_str.split("-")[-1]) # Take upper bound
+                else:
+                    qty_val = float(qty_str)
+                
+                unit_str = norm["unit"] if norm["unit"] else "count"
+                item_qty = qty_val * ureg(unit_str)
+            except Exception as e:
+                print(f"Pint parsing error for {norm}: {e}")
+                item_qty = 1 * ureg.count
 
             if base_name not in aggregated_ingredients:
                 aggregated_ingredients[base_name] = {
@@ -491,15 +392,24 @@ def process_tasks(tasks, session_id):
                     "name": base_name,
                     "instances": [],
                     "original_task_ids": set(),
-                    "totals": {},
+                    "total_qty": None,
                     "likely_have": is_likely_have(base_name)
                 }
 
             # Add to totals
-            totals = aggregated_ingredients[base_name]["totals"]
-            if u_type not in totals:
-                totals[u_type] = 0.0
-            totals[u_type] += base_q
+            if aggregated_ingredients[base_name]["total_qty"] is None:
+                aggregated_ingredients[base_name]["total_qty"] = item_qty
+            else:
+                try:
+                    aggregated_ingredients[base_name]["total_qty"] += item_qty
+                except Exception as e:
+                    # If units are incompatible (e.g., 1 bunch + 2 cups), keep them separate or just use the new one?
+                    # For now, let's try to convert to the existing unit if possible
+                    try:
+                        aggregated_ingredients[base_name]["total_qty"] += item_qty.to(aggregated_ingredients[base_name]["total_qty"].units)
+                    except:
+                        # Fallback: just store it as is (this is a limitation of a simple sum)
+                        pass
 
             aggregated_ingredients[base_name]["instances"].append({
                 "raw": raw_ing,
@@ -514,26 +424,15 @@ def process_tasks(tasks, session_id):
     for k, v in aggregated_ingredients.items():
         v["original_task_ids"] = list(v["original_task_ids"])
 
-        # Determine display name from totals
-        totals = v.pop("totals")
-        parts = []
-
-        for u_type, quantity in totals.items():
-            if u_type not in ["weight", "volume", "count"]:
-                 q_str, _ = format_quantity(quantity, "count")
-                 parts.append(f"{q_str} {u_type}")
+        qty_obj = v.pop("total_qty")
+        if qty_obj:
+            q_str, u_str = format_quantity(qty_obj)
+            if u_str:
+                v["name"] = f"{q_str} {u_str} {v['base_name']}"
             else:
-                 q_str, u_str = format_quantity(quantity, u_type)
-                 if u_str:
-                     parts.append(f"{q_str} {u_str}")
-                 else:
-                     parts.append(f"{q_str}")
-
-        qty_part = ", ".join(parts)
-        if qty_part:
-             v["name"] = f"{qty_part} {v['base_name']}"
+                v["name"] = f"{q_str} {v['base_name']}"
         else:
-             v["name"] = v["base_name"]
+            v["name"] = v["base_name"]
 
         results.append(v)
 
