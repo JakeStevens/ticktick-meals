@@ -1,6 +1,8 @@
 import os
 import time
 import secrets
+import signal
+import sys
 from flask import Flask, render_template, redirect, request, session, url_for, jsonify
 import requests
 from concurrent.futures import ThreadPoolExecutor
@@ -152,6 +154,8 @@ def get_ingredients_from_llm(recipe_name, session_id=None):
             ]
         )
         content = response.choices[0].message.content
+        if content is None:
+            content = ""
 
         if session_id:
             database.log_event(session_id, "llm_response", {"recipe": recipe_name, "response": content})
@@ -742,6 +746,14 @@ def create_grocery_list():
         responses = list(executor.map(create_task, selected_items))
         
     return jsonify({"status": "success", "count": len(responses)})
+
+def graceful_shutdown(sig, frame):
+    print("Shutting down gracefully...")
+    database.close_db()
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, graceful_shutdown)
+signal.signal(signal.SIGTERM, graceful_shutdown)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", debug=True)

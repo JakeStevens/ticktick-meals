@@ -3,24 +3,37 @@ import sqlite3
 import json
 import uuid
 import threading
+import shutil
 from datetime import datetime
 
 DB_FILE = os.getenv("DB_PATH", "meal_planner.db")
+BACKUP_FILE = DB_FILE + ".bak"
 _local = threading.local()
 
 def get_connection():
     """Get a thread-local persistent SQLite connection."""
     if not hasattr(_local, "conn"):
         _local.conn = sqlite3.connect(DB_FILE, check_same_thread=False)
-        # Enable WAL mode for better concurrency and performance
-        _local.conn.execute("PRAGMA journal_mode=WAL")
+        # Switch to DELETE mode for better reliability in container volumes
+        _local.conn.execute("PRAGMA journal_mode=DELETE")
     return _local.conn
 
 def close_db():
     """Close the thread-local persistent SQLite connection."""
     if hasattr(_local, "conn"):
-        _local.conn.close()
+        try:
+            _local.conn.close()
+        except:
+            pass
         del _local.conn
+
+def backup_db():
+    """Create a simple backup of the database file."""
+    try:
+        if os.path.exists(DB_FILE):
+            shutil.copy2(DB_FILE, BACKUP_FILE)
+    except Exception as e:
+        print(f"Backup failed: {e}")
 
 def init_db():
     conn = get_connection()
@@ -72,3 +85,4 @@ def complete_session(session_id):
     c = conn.cursor()
     c.execute("UPDATE sessions SET is_complete = 1, completed_at = ? WHERE id = ?", (datetime.now().isoformat(), session_id))
     conn.commit()
+    backup_db()
