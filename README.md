@@ -7,7 +7,11 @@ A Python Flask application that integrates with the TickTick Open API to streaml
   - `sessions`: Tracks unique execution sessions (e.g. scan to grocery list creation).
   - `logs`: Stores raw events (e.g., LLM prompts/responses, normalization steps, errors).
   - `audit_log`: Records the final outcome for each ingredient instance (e.g. added as-is, corrected, rejected).
-- **Logs**: Application logs are stored in `app.log`, which is mounted as a host volume. Additionally, local JSONL files (`corrections.jsonl`, `rejections.jsonl`) record user corrections and skipped ingredients.
+- **Logs**: Application logs are stored in `app.log`, which is mounted as a host volume. Additionally, local JSONL files (`bad_info.jsonl`, `rejections.jsonl`) record items flagged as "Bad Info" and ingredients skipped by the user.
+
+### Local JSONL Files
+- `bad_info.jsonl`: Stores ingredients flagged with the "Bad Info / AI Error" toggle. Includes the raw context, source recipe, and the final action taken.
+- `rejections.jsonl`: Stores ingredients that were skipped or marked as "already have" by the user.
 
 ## Features
 - **Recipe Scanning**: Scans a specified TickTick list (default: "Week's Meal Ideas") for tasks containing recipe URLs.

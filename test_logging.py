@@ -121,7 +121,7 @@ class TestLogging(unittest.TestCase):
 
             payload = {
                 "items": ["Item 1"],
-                "corrections": [{"original_name": "Bad", "corrected_name": "Good"}],
+                "bad_info_items": [{"name": "Bad", "raw_context": ["1 cup bad"], "action": "added"}],
                 "session_id": session_id
             }
 
@@ -135,8 +135,8 @@ class TestLogging(unittest.TestCase):
             conn = sqlite3.connect(self.test_db)
             c = conn.cursor()
 
-            # Check logs for corrections
-            c.execute("SELECT data FROM logs WHERE session_id=? AND event_type='corrections'", (session_id,))
+            # Check logs for bad info
+            c.execute("SELECT data FROM logs WHERE session_id=? AND event_type='bad_info_flagged'", (session_id,))
             log = c.fetchone()
             self.assertIsNotNone(log)
             self.assertIn("Bad", log[0])
@@ -190,8 +190,8 @@ class TestLogging(unittest.TestCase):
             conn = sqlite3.connect(self.test_db)
             c = conn.cursor()
 
-            # Check added_asis
-            c.execute("SELECT ingredient_raw, ingredient_final, outcome FROM audit_log WHERE session_id=? AND outcome='added_asis'", (session_id,))
+            # Check added
+            c.execute("SELECT ingredient_raw, ingredient_final, outcome FROM audit_log WHERE session_id=? AND outcome='added'", (session_id,))
             row = c.fetchone()
             self.assertIsNotNone(row)
             self.assertEqual(row[0], "1 cup base")
