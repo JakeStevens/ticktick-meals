@@ -79,15 +79,6 @@
             
             <div class="d-flex justify-content-center align-items-center my-3">
                 <span id="ingredient-display">Onions</span>
-                <input type="text" id="ingredient-edit-input" class="form-control hidden text-center fw-bold" style="font-size: 1.5rem; max-width: 300px;">
-
-                <div class="ms-2">
-                     <button id="edit-btn" onclick="enableEdit()" class="btn btn-outline-secondary btn-sm" title="Edit">✏️</button>
-                     <div id="edit-actions" class="hidden d-flex gap-1">
-                        <button onclick="saveEdit()" class="btn btn-success btn-sm">✅</button>
-                        <button onclick="cancelEdit()" class="btn btn-danger btn-sm">❌</button>
-                     </div>
-                </div>
             </div>
             
             <div id="recipe-context">
@@ -98,10 +89,11 @@
                 <button onclick="handleYes()" class="btn btn-success btn-lg w-100 py-3 action-btn">Add to List ✅</button>
                 <div class="d-flex gap-2">
                     <button onclick="handleSkip()" class="btn btn-warning w-100 py-2 action-btn">Skip ⏭️</button>
+                    <button onclick="handleHaveIt()" class="btn btn-outline-secondary w-100 py-2 action-btn">Have it 🏠</button>
                 </div>
-                <div class="d-flex gap-2">
-                    <button onclick="handleHaveIt()" class="btn btn-outline-secondary w-50 py-2 action-btn">Have it 🏠</button>
-                    <button onclick="handleBadInfo()" class="btn btn-outline-danger w-50 py-2 action-btn">Bad Info 🚫</button>
+                <div class="form-check form-switch mt-2 d-flex justify-content-center">
+                    <input class="form-check-input me-2" type="checkbox" id="bad-info-toggle">
+                    <label class="form-check-label text-danger fw-bold" for="bad-info-toggle">Bad Info / AI Error 🚫</label>
                 </div>
             </div>
             <div class="mt-3 text-muted">
@@ -183,66 +175,17 @@
         let skippedMeals = [];
         let selectedItems = [];
         let manualItems = [];
-        let corrections = [];
         let rejectedItems = [];
+        let badInfoItems = [];
         let currentIndex = 0;
         let sessionId = null;
         let isTestMode = false;
-        let isEditing = false;
-
-        const UNITS = [
-            "cup", "cups", "tbsp", "tsp", "tablespoon", "teaspoon",
-            "oz", "ounce", "ounces", "lb", "lbs", "pound", "pounds",
-            "g", "gram", "grams", "kg", "ml", "l", "liter", "pinch",
-            "slice", "slices", "clove", "cloves", "can", "cans", "jar", "jars",
-            "package", "packages", "bunch", "bunches", "large", "small", "medium",
-            "head", "heads", "bag", "bags"
-        ];
-
-        function normalizeIngredient(text) {
-            let originalText = text;
-            text = text.toLowerCase();
-            text = text.replace(/\(.*?\)/g, '').trim(); // Remove parens
-
-            // Extract quantity
-            let quantity = "";
-            const quantityMatch = text.match(/^([\d\s\/\.\-]+)/);
-            if (quantityMatch) {
-                quantity = quantityMatch[1].trim();
-                text = text.replace(/^[\d\s\/\.\-]+/, '').trim();
-            }
-
-            let words = text.split(/\s+/);
-            let unit = "";
-
-            if (words.length > 0 && UNITS.includes(words[0])) {
-                unit = words.shift();
-            }
-
-            if (words.length > 0 && words[0] === "of") {
-                words.shift();
-            }
-
-            let baseName = words.join(" ").trim();
-
-            if (!baseName) {
-                baseName = originalText;
-            }
-
-            return {
-                name: baseName,
-                quantity: quantity,
-                unit: unit
-            };
-        }
 
         function lockUI() {
-            isEditing = true;
             document.querySelectorAll('.action-btn').forEach(btn => btn.disabled = true);
         }
 
         function unlockUI() {
-            isEditing = false;
             document.querySelectorAll('.action-btn').forEach(btn => btn.disabled = false);
         }
 
@@ -382,154 +325,6 @@
             }
         }
 
-        // Edit Logic
-        function enableEdit() {
-            lockUI();
-            const display = document.getElementById('ingredient-display');
-            const input = document.getElementById('ingredient-edit-input');
-            const editBtn = document.getElementById('edit-btn');
-            const editActions = document.getElementById('edit-actions');
-
-            input.value = display.innerText;
-
-            display.classList.add('hidden');
-            editBtn.classList.add('hidden');
-            editActions.classList.remove('hidden');
-
-            input.classList.remove('hidden');
-            input.focus();
-        }
-
-        function saveEdit() {
-            const input = document.getElementById('ingredient-edit-input');
-            const newName = input.value.trim();
-            const originalName = ingredientsQueue[currentIndex].name;
-
-            if (newName && newName !== originalName) {
-                // Record correction
-                corrections.push({
-                    original_name: originalName,
-                    corrected_name: newName,
-                    context: ingredientsQueue[currentIndex].instances.map(i => i.raw)
-                });
-
-                // Update data
-                ingredientsQueue[currentIndex].name = newName;
-
-                // Update base_name to match the new title for consistent grouping
-                const normalized = normalizeIngredient(newName);
-                ingredientsQueue[currentIndex].base_name = normalized.name;
-
-                document.getElementById('ingredient-display').innerText = newName;
-            }
-
-            cancelEdit();
-        }
-
-        function cancelEdit() {
-            unlockUI();
-            const display = document.getElementById('ingredient-display');
-            const input = document.getElementById('ingredient-edit-input');
-            const editBtn = document.getElementById('edit-btn');
-            const editActions = document.getElementById('edit-actions');
-
-            display.classList.remove('hidden');
-            input.classList.add('hidden');
-            editBtn.classList.remove('hidden');
-            editActions.classList.add('hidden');
-        }
-
-        function enableInstanceEdit(index) {
-            lockUI();
-            document.getElementById(`inst-display-${index}`).classList.add('hidden');
-            document.getElementById(`inst-edit-btn-${index}`).classList.add('hidden');
-            document.getElementById(`inst-input-${index}`).classList.remove('hidden');
-            document.getElementById(`inst-actions-${index}`).classList.remove('hidden');
-            document.getElementById(`inst-input-${index}`).focus();
-
-            // Handle enter key
-            document.getElementById(`inst-input-${index}`).addEventListener('keydown', function(e) {
-                if(e.key === 'Enter') saveInstanceEdit(index);
-                if(e.key === 'Escape') cancelInstanceEdit(index);
-            });
-        }
-
-        function cancelInstanceEdit(index) {
-            unlockUI();
-            document.getElementById(`inst-display-${index}`).classList.remove('hidden');
-            document.getElementById(`inst-edit-btn-${index}`).classList.remove('hidden');
-            document.getElementById(`inst-input-${index}`).classList.add('hidden');
-            document.getElementById(`inst-actions-${index}`).classList.add('hidden');
-        }
-
-        function saveInstanceEdit(index) {
-            const input = document.getElementById(`inst-input-${index}`);
-            const newText = input.value.trim();
-            const group = ingredientsQueue[currentIndex];
-            const oldInstance = group.instances[index];
-
-            if (!newText || newText === oldInstance.raw) {
-                cancelInstanceEdit(index);
-                return;
-            }
-
-            const normalized = normalizeIngredient(newText);
-            const currentBaseName = group.base_name || group.name;
-
-            // If name changed, move it
-            if (normalized.name !== currentBaseName) {
-                // Remove from current
-                group.instances.splice(index, 1);
-
-                // Add to new group
-                let targetGroup = ingredientsQueue.find(g => (g.base_name || g.name) === normalized.name);
-                const newInstance = {
-                    raw: newText,
-                    quantity: normalized.quantity,
-                    unit: normalized.unit,
-                    source: oldInstance.source,
-                    original_name: normalized.name
-                };
-
-                if (targetGroup) {
-                    targetGroup.instances.push(newInstance);
-                } else {
-                    // Create new group
-                    ingredientsQueue.push({
-                        name: normalized.name,
-                        base_name: normalized.name,
-                        instances: [newInstance],
-                        original_task_ids: []
-                    });
-                }
-
-                // If current group is empty, remove it
-                if (group.instances.length === 0) {
-                    ingredientsQueue.splice(currentIndex, 1);
-                    // Since we removed current item, the next item slides into currentIndex
-                    // So we don't need to increment currentIndex, but showCurrentItem will show the new item at currentIndex
-                }
-
-            } else {
-                // Just update current instance
-                oldInstance.raw = newText;
-                oldInstance.quantity = normalized.quantity;
-                oldInstance.unit = normalized.unit;
-            }
-
-            unlockUI();
-            showCurrentItem();
-        }
-
-        // Handle Enter key in input
-        document.getElementById('ingredient-edit-input').addEventListener('keydown', function(e) {
-            if (e.key === 'Enter') {
-                saveEdit();
-            } else if (e.key === 'Escape') {
-                cancelEdit();
-            }
-        });
-
         async function startScan() {
             document.getElementById('start-view').classList.add('hidden');
             document.getElementById('loading-view').classList.remove('hidden');
@@ -568,40 +363,45 @@
             }
 
             const group = ingredientsQueue[currentIndex];
-            
             document.getElementById('ingredient-display').innerText = group.name;
+            document.getElementById('bad-info-toggle').checked = false;
             
-            // Show details (amounts and source recipes)
             const instancesHtml = group.instances.map((inst, index) => {
                 const displayText = `${inst.raw} (from ${inst.source})`;
                 return `
                     <div class="d-flex align-items-center mb-1">
                         <span id="inst-display-${index}" class="me-2">• ${displayText}</span>
-                        <input type="text" id="inst-input-${index}" class="form-control form-control-sm hidden" value="${inst.raw}" style="max-width: 300px;">
-
-                        <button id="inst-edit-btn-${index}" onclick="enableInstanceEdit(${index})" class="btn btn-sm btn-link text-decoration-none p-0 ms-2" title="Edit">✏️</button>
-
-                        <div id="inst-actions-${index}" class="hidden ms-2">
-                            <button onclick="saveInstanceEdit(${index})" class="btn btn-sm btn-success p-0 px-1">✅</button>
-                            <button onclick="cancelInstanceEdit(${index})" class="btn btn-sm btn-danger p-0 px-1">❌</button>
-                        </div>
                     </div>
                 `;
             }).join('');
 
             document.getElementById('recipe-context').innerHTML = instancesHtml;
-
             document.getElementById('progress-indicator').innerText = `Item ${currentIndex + 1} of ${ingredientsQueue.length}`;
         }
 
+        function checkBadInfoToggle(action) {
+            if (document.getElementById('bad-info-toggle').checked) {
+                const item = ingredientsQueue[currentIndex];
+                badInfoItems.push({
+                    name: item.name,
+                    raw_context: item.instances.map(i => i.raw),
+                    source_recipes: [...new Set(item.instances.map(i => i.source))],
+                    action: action
+                });
+            }
+        }
+
         function handleYes() {
-            // Store the full object for better auditing
+            if (currentIndex >= ingredientsQueue.length) return;
+            checkBadInfoToggle("added_to_list");
             selectedItems.push(JSON.parse(JSON.stringify(ingredientsQueue[currentIndex])));
             currentIndex++;
             showCurrentItem();
         }
 
         function handleHaveIt() {
+            if (currentIndex >= ingredientsQueue.length) return;
+            checkBadInfoToggle("have_it");
             rejectedItems.push({
                 name: ingredientsQueue[currentIndex].name,
                 reason: "have_it",
@@ -612,6 +412,8 @@
         }
 
         function handleSkip() {
+            if (currentIndex >= ingredientsQueue.length) return;
+            checkBadInfoToggle("skipped");
             rejectedItems.push({
                 name: ingredientsQueue[currentIndex].name,
                 reason: "user_skipped",
@@ -621,15 +423,6 @@
             showCurrentItem();
         }
 
-        function handleBadInfo() {
-            rejectedItems.push({
-                name: ingredientsQueue[currentIndex].name,
-                reason: "bad_parsing",
-                context: ingredientsQueue[currentIndex].instances.map(i => i.raw)
-            });
-            currentIndex++;
-            showCurrentItem();
-        }
 
         function showSkippedMeals() {
             document.getElementById('chat-view').classList.add('hidden');
@@ -729,7 +522,7 @@
                 items: selectedItems.map(i => i.name),
                 selected_objects: selectedItems,
                 manual_items: manualItems,
-                corrections: corrections,
+                bad_info_items: badInfoItems,
                 rejected_items: rejectedItems,
                 output_list_name: config.outputList,
                 parent_task_name: config.parentTask,

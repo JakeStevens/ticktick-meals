@@ -28,10 +28,17 @@ ureg.define('clove = 1 * count') # garlic cloves
 ureg.define('can = 1 * count')
 ureg.define('jar = 1 * count')
 ureg.define('package = 1 * count')
+ureg.define('pkg = 1 * package')
 ureg.define('bunch = 1 * count')
 ureg.define('head = 1 * count')
 ureg.define('bag = 1 * count')
 ureg.define('slice = 1 * count')
+ureg.define('piece = 1 * count')
+ureg.define('box = 1 * count')
+ureg.define('container = 1 * count')
+ureg.define('bottle = 1 * count')
+ureg.define('stalk = 1 * count')
+ureg.define('sprig = 1 * count')
 
 # Load environment variables
 load_dotenv()
@@ -56,14 +63,14 @@ if LLM_PROVIDER == "gemini":
     llm_client = OpenAI(
         api_key=os.getenv("GEMINI_API_KEY"),
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        timeout=30.0
+        timeout=60.0
     )
     LLM_MODEL = "gemini-3-flash-preview"
 else:
     llm_client = OpenAI(
         base_url=os.getenv("LLM_HOST"),
         api_key="sk-no-key-required",
-        timeout=30.0
+        timeout=60.0
     )
     LLM_MODEL = "default"
 
@@ -194,21 +201,24 @@ def get_ingredients_from_llm(recipe_name, session_id=None, ignore_recipe=None):
             database.log_event(session_id, "llm_error", {"recipe": recipe_name, "error": str(e)})
         raise e
 
-def normalize_ingredient(text, session_id=None):
-    """
-    Use LLM to extract base name, quantity, and unit.
-    """
+def normalize_ingredients_batch(ingredients, session_id=None):
+    if not ingredients:
+        return []
+    
     system_prompt = (
-        "You are a culinary data specialist. Your task is to normalize raw ingredient strings into a structured JSON format. "
-        "Extract the 'name', 'quantity', and 'unit'. \n"
+        "You are a culinary data specialist. Your task is to normalize a list of raw ingredient strings into a structured JSON format. "
+        "Return a JSON object with an 'ingredients' key containing an array of objects. "
+        "Each object must have 'name', 'quantity', 'unit', and 'original_index'. \n"
         "Guidelines:\n"
-        "- 'name': The base ingredient (e.g., 'onion', 'chicken breast'). Remove preparation adjectives like 'chopped', 'diced' unless they are essential to the identity of the item.\n"
-        "- 'quantity': A numeric string (e.g., '1', '0.5', '1 1/2'). If no quantity is specified, use '1'.\n"
-        "- 'unit': A standard culinary unit (e.g., 'cup', 'oz', 'gram', 'clove', 'can', 'bunch'). If it is a simple count, use 'count'.\n"
-        "Return ONLY the JSON object."
+        "- 'name': The base ingredient (e.g., 'onion', 'chicken breast'). Remove preparation adjectives like 'chopped', 'diced' unless essential. \n"
+        "  CRITICAL: If the input has a compound or descriptive unit like '3.2-ounce package' or '1-inch piece', move the descriptive part into the name, e.g., 'Japanese curry roux (3.2-ounce package)' or 'Ginger (1-inch piece)'.\n"
+        "- 'quantity': A numeric string (e.g., '1', '0.5', '1.5'). Do not include units here.\n"
+        "- 'unit': A single standard unit (e.g., 'cup', 'tbsp', 'oz', 'lb', 'gram', 'clove', 'can', 'pkg', 'piece', 'box'). If it's a simple count, use 'count'.\n"
+        "- 'original_index': The integer index of the ingredient in the input list (starting from 0).\n"
+        "CRITICAL: You must provide an entry for EVERY ingredient in the input list. Return ONLY the JSON object."
     )
     
-    user_prompt = f"Normalize this ingredient: \"{text}\""
+    user_prompt = "Normalize these ingredients:\n" + "\n".join([f"{i}: {ing}" for i, ing in enumerate(ingredients)])
 
     try:
         response = llm_client.chat.completions.create(
@@ -219,17 +229,32 @@ def normalize_ingredient(text, session_id=None):
             ],
             response_format={"type": "json_object"}
         )
-        norm = json.loads(response.choices[0].message.content)
-        # Ensure keys exist
-        return {
-            "name": str(norm.get("name", text)),
-            "quantity": str(norm.get("quantity", "1")),
-            "unit": str(norm.get("unit", "count"))
-        }
+        data = json.loads(response.choices[0].message.content)
+        normalized_list = data.get("ingredients", [])
+        
+        # Match back to original list using original_index
+        indexed_norms = {int(norm.get("original_index", -1)): norm for norm in normalized_list}
+        results = []
+        for i, raw in enumerate(ingredients):
+            norm = indexed_norms.get(i)
+            if norm:
+                results.append({
+                    "name": str(norm.get("name", raw)),
+                    "quantity": str(norm.get("quantity", "1")),
+                    "unit": str(norm.get("unit", "count"))
+                })
+            else:
+                results.append({"name": raw, "quantity": "1", "unit": "count"})
+        return results
     except Exception as e:
-        print(f"Normalization LLM Error: {e}")
-        # Simple regex fallback if LLM fails
-        return {"name": text, "quantity": "1", "unit": "count"}
+        print(f"Batch Normalization LLM Error: {e}")
+        return [{"name": ing, "quantity": "1", "unit": "count"} for ing in ingredients]
+
+def normalize_ingredient(text, session_id=None):
+    """
+    Fallback/Single version - now uses batch version.
+    """
+    return normalize_ingredients_batch([text], session_id=session_id)[0]
 
 def format_quantity(quantity_obj):
     """Formats a Pint Quantity object into a readable string and unit."""
@@ -283,165 +308,177 @@ def is_likely_have(name):
     return False
 
 def process_tasks(tasks, session_id):
-    total_tasks = len(tasks)
-    aggregated_ingredients = {}
-    skipped_meals = []
+    try:
+        total_tasks = len(tasks)
+        aggregated_ingredients = {}
+        skipped_meals = []
 
-    days_pattern = re.compile(r'\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\b[:\-]?\s*', re.IGNORECASE)
+        days_pattern = re.compile(r'\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\b[:\-]?\s*', re.IGNORECASE)
 
-    for i, task in enumerate(tasks):
-        title = task.get("title", "")
-        content = task.get("content", "")
-        desc = task.get("desc", "")
-        all_text = f"{title} {content} {desc}"
+        for i, task in enumerate(tasks):
+            title = task.get("title", "")
+            content = task.get("content", "")
+            desc = task.get("desc", "")
+            all_text = f"{title} {content} {desc}"
 
-        all_text = days_pattern.sub('', all_text)
-        urls = URL_PATTERN.findall(all_text)
+            all_text = days_pattern.sub('', all_text)
+            urls = URL_PATTERN.findall(all_text)
 
-        recipe_ingredients = []
-        recipe_name = title
-        scraped_successfully = False
-        scraped_title = None
+            recipe_ingredients = []
+            recipe_name = title
+            scraped_successfully = False
+            scraped_title = None
 
-        if urls:
-            yield f"data: {json.dumps({'status': f'[{i+1}/{total_tasks}] Scraping recipe: {title[:50]}...'})}\n\n"
-            for url in urls:
-                try:
-                    clean_url = url.strip(').,!? :;')
-                    scraper = scrape_me(clean_url)
-                    ings = scraper.ingredients()
-                    if ings:
-                        scraped_title = scraper.title()
-                        for ing in ings:
-                            recipe_ingredients.append({"raw": ing, "source": scraped_title, "type": "scrape"})
-                        recipe_name = scraped_title
-                        scraped_successfully = True
-                        break
-                except Exception as e:
-                    print(f"Failed to scrape {url}: {e}")
-
-        # Extract remaining text after scraping URLs
-        remaining_text = all_text
-        for url in urls:
-            remaining_text = remaining_text.replace(url, "")
-        remaining_text = remaining_text.strip('., :-\t\n\r')
-
-        if remaining_text:
-            yield f"data: {json.dumps({'status': f'[{i+1}/{total_tasks}] Asking LLM for: {remaining_text[:50]}...'})}\n\n"
-            try:
-                llm_ings = get_ingredients_from_llm(remaining_text, session_id=session_id, ignore_recipe=scraped_title if scraped_successfully else None)
-                if llm_ings:
-                    for ing in llm_ings:
-                        recipe_ingredients.append({"raw": ing, "source": f"LLM: {remaining_text[:30]}", "type": "llm"})
-            except Exception as e:
-                yield f"data: {json.dumps({'status': f'⚠️ LLM failed for {remaining_text[:30]}: {str(e)}'})}\n\n"
-
-        if not recipe_ingredients:
-            skipped_meals.append(recipe_name)
-            # Notify user of skip
-            yield f"data: {json.dumps({'status': f'⏩ Skipping {recipe_name[:30]} (no ingredients found)'})}\n\n"
-            time.sleep(0.5) # Brief pause so they can see the skip status
-
-        types = list(set(i['type'] for i in recipe_ingredients))
-        if len(types) > 1:
-            source_type = "mixed"
-        elif types:
-            source_type = types[0]
-        else:
-            source_type = "unknown"
-
-        database.log_event(session_id, "raw_ingredients", {
-            "recipe": recipe_name,
-            "source": source_type,
-            "ingredients": [i["raw"] for i in recipe_ingredients]
-        })
-
-        for item in recipe_ingredients:
-            raw_ing = item["raw"]
-            source_name = item["source"]
-            norm = normalize_ingredient(raw_ing, session_id=session_id)
-
-            database.log_event(session_id, "normalization", {
-                "input": raw_ing,
-                "output": norm
-            })
-
-            base_name = norm["name"]
-            
-            # Create Pint quantity
-            try:
-                # Handle fractions or ranges in quantity via a simple evaluator or Pint's parsing
-                qty_str = norm["quantity"]
-                if "/" in qty_str and " " in qty_str:
-                    parts = qty_str.split()
-                    qty_val = float(parts[0]) + float(Fraction(parts[1]))
-                elif "/" in qty_str:
-                    qty_val = float(Fraction(qty_str))
-                elif "-" in qty_str:
-                    qty_val = float(qty_str.split("-")[-1]) # Take upper bound
-                else:
-                    qty_val = float(qty_str)
-                
-                unit_str = norm["unit"] if norm["unit"] else "count"
-                item_qty = qty_val * ureg(unit_str)
-            except Exception as e:
-                print(f"Pint parsing error for {norm}: {e}")
-                item_qty = 1 * ureg.count
-
-            if base_name not in aggregated_ingredients:
-                aggregated_ingredients[base_name] = {
-                    "base_name": base_name,
-                    "name": base_name,
-                    "instances": [],
-                    "original_task_ids": set(),
-                    "total_qty": None,
-                    "likely_have": is_likely_have(base_name)
-                }
-
-            # Add to totals
-            if aggregated_ingredients[base_name]["total_qty"] is None:
-                aggregated_ingredients[base_name]["total_qty"] = item_qty
-            else:
-                try:
-                    aggregated_ingredients[base_name]["total_qty"] += item_qty
-                except Exception as e:
-                    # If units are incompatible (e.g., 1 bunch + 2 cups), keep them separate or just use the new one?
-                    # For now, let's try to convert to the existing unit if possible
+            if urls:
+                yield f"data: {json.dumps({'status': f'[{i+1}/{total_tasks}] Scraping recipe: {title[:50]}...'})}\n\n"
+                for url in urls:
                     try:
-                        aggregated_ingredients[base_name]["total_qty"] += item_qty.to(aggregated_ingredients[base_name]["total_qty"].units)
-                    except:
-                        # Fallback: just store it as is (this is a limitation of a simple sum)
-                        pass
+                        clean_url = url.strip(').,!? :;')
+                        scraper = scrape_me(clean_url)
+                        ings = scraper.ingredients()
+                        if ings:
+                            scraped_title = scraper.title()
+                            for ing in ings:
+                                recipe_ingredients.append({"raw": ing, "source": scraped_title, "type": "scrape"})
+                            recipe_name = scraped_title
+                            scraped_successfully = True
+                            break
+                    except Exception as e:
+                        print(f"Failed to scrape {url}: {e}")
 
-            aggregated_ingredients[base_name]["instances"].append({
-                "raw": raw_ing,
-                "quantity": norm["quantity"],
-                "unit": norm["unit"],
-                "source": source_name,
-                "original_name": norm["name"]
+            # Extract remaining text after scraping URLs
+            remaining_text = all_text
+            for url in urls:
+                remaining_text = remaining_text.replace(url, "")
+            remaining_text = remaining_text.strip('., :-\t\n\r')
+
+            if remaining_text:
+                # Skip LLM if text is likely just the recipe name we already scraped
+                skip_llm = False
+                if scraped_successfully:
+                    clean_rem = remaining_text.lower().strip(': ')
+                    if not clean_rem or len(clean_rem) < 3:
+                        skip_llm = True
+                    elif scraped_title and (clean_rem in scraped_title.lower() or scraped_title.lower() in clean_rem):
+                        skip_llm = True
+                
+                if not skip_llm:
+                    yield f"data: {json.dumps({'status': f'[{i+1}/{total_tasks}] Asking LLM for: {remaining_text[:50]}...'})}\n\n"
+                    try:
+                        llm_ings = get_ingredients_from_llm(remaining_text, session_id=session_id, ignore_recipe=scraped_title if scraped_successfully else None)
+                        if llm_ings:
+                            for ing in llm_ings:
+                                recipe_ingredients.append({"raw": ing, "source": f"LLM: {remaining_text[:30]}", "type": "llm"})
+                    except Exception as e:
+                        yield f"data: {json.dumps({'status': f'⚠️ LLM failed for {remaining_text[:30]}: {str(e)}'})}\n\n"
+
+            if not recipe_ingredients:
+                skipped_meals.append(recipe_name)
+                yield f"data: {json.dumps({'status': f'⏩ Skipping {recipe_name[:30]} (no ingredients found)'})}\n\n"
+                continue
+
+            # Batch normalize all ingredients for this recipe
+            raw_ings = [item["raw"] for item in recipe_ingredients]
+            yield f"data: {json.dumps({'status': f'[{i+1}/{total_tasks}] Normalizing {len(raw_ings)} ingredients...'})}\n\n"
+            normalized_ings = normalize_ingredients_batch(raw_ings, session_id=session_id)
+
+            types = list(set(i['type'] for i in recipe_ingredients))
+            source_type = "mixed" if len(types) > 1 else (types[0] if types else "unknown")
+
+            database.log_event(session_id, "raw_ingredients", {
+                "recipe": recipe_name,
+                "source": source_type,
+                "ingredients": raw_ings
             })
-            aggregated_ingredients[base_name]["original_task_ids"].add(task["id"])
 
-    results = []
-    for k, v in aggregated_ingredients.items():
-        v["original_task_ids"] = list(v["original_task_ids"])
+            for item, norm in zip(recipe_ingredients, normalized_ings):
+                raw_ing = item["raw"]
+                source_name = item["source"]
+                # norm is from batch
 
-        qty_obj = v.pop("total_qty")
-        if qty_obj:
-            q_str, u_str = format_quantity(qty_obj)
-            if u_str:
-                v["name"] = f"{q_str} {u_str} {v['base_name']}"
+                database.log_event(session_id, "normalization", {
+                    "input": raw_ing,
+                    "output": norm
+                })
+
+                base_name = norm["name"]
+                
+                # Create Pint quantity
+                try:
+                    # Handle fractions or ranges in quantity
+                    qty_str = norm["quantity"]
+                    if "/" in qty_str and " " in qty_str:
+                        parts = qty_str.split()
+                        qty_val = float(parts[0]) + float(Fraction(parts[1]))
+                    elif "/" in qty_str:
+                        qty_val = float(Fraction(qty_str))
+                    elif "-" in qty_str:
+                        qty_val = float(qty_str.split("-")[-1]) # Take upper bound
+                    else:
+                        qty_val = float(qty_str)
+                    
+                    unit_str = norm["unit"] if norm["unit"] else "count"
+                    item_qty = qty_val * ureg(unit_str)
+                except Exception as e:
+                    print(f"Pint parsing error for {norm}: {e}")
+                    item_qty = 1 * ureg.count
+
+                if base_name not in aggregated_ingredients:
+                    aggregated_ingredients[base_name] = {
+                        "base_name": base_name,
+                        "name": base_name,
+                        "instances": [],
+                        "original_task_ids": set(),
+                        "total_qty": None,
+                        "likely_have": is_likely_have(base_name)
+                    }
+
+                # Add to totals
+                if aggregated_ingredients[base_name]["total_qty"] is None:
+                    aggregated_ingredients[base_name]["total_qty"] = item_qty
+                else:
+                    try:
+                        aggregated_ingredients[base_name]["total_qty"] += item_qty
+                    except Exception as e:
+                        try:
+                            aggregated_ingredients[base_name]["total_qty"] += item_qty.to(aggregated_ingredients[base_name]["total_qty"].units)
+                        except:
+                            pass
+
+                aggregated_ingredients[base_name]["instances"].append({
+                    "raw": raw_ing,
+                    "quantity": norm["quantity"],
+                    "unit": norm["unit"],
+                    "source": source_name,
+                    "original_name": norm["name"]
+                })
+                aggregated_ingredients[base_name]["original_task_ids"].add(task["id"])
+
+        results = []
+        for k, v in aggregated_ingredients.items():
+            v["original_task_ids"] = list(v["original_task_ids"])
+
+            qty_obj = v.pop("total_qty")
+            if qty_obj:
+                q_str, u_str = format_quantity(qty_obj)
+                if u_str:
+                    v["name"] = f"{q_str} {u_str} {v['base_name']}"
+                else:
+                    v["name"] = f"{q_str} {v['base_name']}"
             else:
-                v["name"] = f"{q_str} {v['base_name']}"
-        else:
-            v["name"] = v["base_name"]
+                v["name"] = v["base_name"]
 
-        results.append(v)
+            results.append(v)
 
-    database.log_event(session_id, "aggregation", {"result": results})
-    database.log_event(session_id, "skipped_meals", skipped_meals)
+        database.log_event(session_id, "aggregation", {"result": results})
+        database.log_event(session_id, "skipped_meals", skipped_meals)
 
-    yield f"data: {json.dumps({'ingredients': results, 'session_id': session_id, 'skipped_meals': skipped_meals})}\n\n"
+        yield f"data: {json.dumps({'ingredients': results, 'session_id': session_id, 'skipped_meals': skipped_meals})}\n\n"
+    except Exception as e:
+        import traceback
+        error_msg = f"CRITICAL ERROR in process_tasks: {str(e)}\n{traceback.format_exc()}"
+        print(error_msg)
+        yield f"data: {json.dumps({'error': 'A critical error occurred during processing.'})}\n\n"
 
 @app.route("/api/scan_meals", methods=["POST"])
 def scan_meals():
@@ -543,7 +580,7 @@ def create_grocery_list():
 
     selected_items = data.get("items", []) 
     manual_items = data.get("manual_items", [])
-    corrections = data.get("corrections", [])
+    bad_info_items = data.get("bad_info_items", [])
     rejected_items = data.get("rejected_items", [])
     session_id = data.get("session_id")
     output_list_name = "Groceries"
@@ -551,28 +588,34 @@ def create_grocery_list():
     if session_id and manual_items:
         database.log_event(session_id, "manual_items", manual_items)
 
-    # Save corrections if any
-    if corrections:
+    # Determine log directory from DB_PATH
+    db_path = os.getenv("DB_PATH", "meal_planner.db")
+    log_dir = os.path.dirname(db_path) if os.path.dirname(db_path) else "."
+    bad_info_path = os.path.join(log_dir, "bad_info.jsonl")
+    rejections_path = os.path.join(log_dir, "rejections.jsonl")
+
+    # Save Bad Info flags if any
+    if bad_info_items:
         try:
             timestamp = datetime.now().isoformat()
-            file_corrections = []
-            for corr in corrections:
-                file_corrections.append({
+            log_entries = []
+            for item in bad_info_items:
+                log_entries.append({
                     "timestamp": timestamp,
-                    "original_name": corr.get("original_name"),
-                    "corrected_name": corr.get("corrected_name"),
-                    "context": corr.get("context", [])
+                    "name": item.get("name"),
+                    "raw_context": item.get("raw_context", []),
+                    "source_recipes": item.get("source_recipes", []),
+                    "action": item.get("action")
                 })
 
-            corrections_file = "corrections.jsonl"
-            with open(corrections_file, "a") as f:
-                for correction in file_corrections:
-                    f.write(json.dumps(correction) + "\n")
+            with open(bad_info_path, "a") as f:
+                for entry in log_entries:
+                    f.write(json.dumps(entry) + "\n")
         except Exception as e:
-            print(f"Error saving corrections: {e}")
+            print(f"Error saving bad info: {e}")
 
         if session_id:
-            database.log_event(session_id, "corrections", corrections)
+            database.log_event(session_id, "bad_info_flagged", bad_info_items)
 
     # Save rejections if any
     if rejected_items:
@@ -587,8 +630,7 @@ def create_grocery_list():
                     "context": item.get("context", [])
                 })
 
-            rejections_file = "rejections.jsonl"
-            with open(rejections_file, "a") as f:
+            with open(rejections_path, "a") as f:
                 for rejection in file_rejections:
                     f.write(json.dumps(rejection) + "\n")
         except Exception as e:
@@ -597,21 +639,17 @@ def create_grocery_list():
         if session_id:
             database.log_event(session_id, "rejections", rejected_items)
 
-    # Audit Log: Record all selected items (including corrections)
+    # Audit Log: Record all selected items
     if session_id:
         # First, mark session complete
         database.complete_session(session_id)
 
         selected_objects = data.get("selected_objects", [])
         
-        # 1. Approved items (including corrected ones if they are in selected_objects)
-        # We'll use the objects to get raw context
+        # 1. Approved items
         for obj in selected_objects:
             final_name = obj.get('name')
             base_name = obj.get('base_name')
-            
-            # Check if this was corrected (if name != what we think normalized was)
-            # Actually, the 'corrections' list is more explicit.
             
             for inst in obj.get('instances', []):
                 database.log_audit(
@@ -620,12 +658,11 @@ def create_grocery_list():
                     base_name, 
                     final_name, 
                     inst.get('source'), 
-                    "added_asis" if final_name not in [c['corrected_name'] for c in corrections] else "added_corrected"
+                    "added"
                 )
 
         # 2. Rejections
         for rej in rejected_items:
-            # Rej context comes from the frontend as raw lines
             for raw in rej.get('context', []):
                 database.log_audit(session_id, raw, rej.get('name'), rej.get('name'), "Unknown", f"rejected_{rej.get('reason')}")
 
@@ -634,7 +671,7 @@ def create_grocery_list():
              database.log_audit(session_id, "N/A", item, item, "Manual Entry", "added_manual")
 
     if not selected_items:
-        return jsonify({"status": "No items to add", "corrections_saved": len(corrections)})
+        return jsonify({"status": "No items to add", "bad_info_saved": len(bad_info_items)})
 
     if test_mode:
         return jsonify({"status": "success", "count": len(selected_items), "test_mode": True})
