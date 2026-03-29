@@ -165,10 +165,17 @@ def audit():
 
 def get_ingredients_from_llm(recipe_name, session_id=None, ignore_recipe=None):
     system_prompt = "You are a helpful culinary assistant. Provide only a simple bulleted list of high-level ingredient names. Do not include any Markdown code blocks, JSON formatting, or preamble/postamble. If no ingredients are needed, return an empty response."
-    user_prompt = f"List the ingredients required for a typical version of {recipe_name}. Keep the ingredients high level, things like spices can be assumed to be available. Provide the list as a simple bulleted list of ingredient names only. If the entry is something that doesn't need ingredients, such as 'left overs', 'freezer meal', 'takeout', 'Brassica', 'date night', or similar non-recipe items, return an empty response. IMPORTANT: If the item itself is a 'prepped' dish that can be considered a single ingredient (e.g., 'Risotto', 'Mac n Cheese', 'Frozen Pizza', 'Salad Kit'), simply return that item name as the sole ingredient."
+    user_prompt = (
+        f"List the ingredients required for a typical version of '{recipe_name}'. \n"
+        "GUIDELINES:\n"
+        "- Keep ingredients high level (spices can be assumed).\n"
+        "- If the input contains multiple distinct dishes or items (e.g., 'Chicken tenders, fries, salad'), treat each one as a 'prepped' item and return them as the ingredients themselves.\n"
+        "- IMPORTANT: If an item is commonly sold pre-made or is a 'prepped' dish (e.g., 'Chicken Tenders', 'Salad Kit', 'Frozen Pizza', 'Risotto', 'Mac n Cheese'), **DO NOT break it down**. Return that item name as the sole ingredient.\n"
+        "- If the entry is a non-recipe item (e.g., 'left overs', 'takeout', 'date night'), return an empty response."
+    )
 
     if ignore_recipe:
-        user_prompt += f" Ignore the ingredients for {ignore_recipe} since its ingredients are extracted separately."
+        user_prompt += f"\n- Ignore the ingredients for {ignore_recipe} since its ingredients are extracted separately."
 
     if session_id:
         database.log_event(session_id, "llm_prompt", {
@@ -177,89 +184,110 @@ def get_ingredients_from_llm(recipe_name, session_id=None, ignore_recipe=None):
             "system_prompt": system_prompt
         })
 
-    try:
-        response = llm_client.chat.completions.create(
-            model=LLM_MODEL, 
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ]
-        )
-        content = response.choices[0].message.content
-        if content is None:
-            content = ""
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = llm_client.chat.completions.create(
+                model=LLM_MODEL, 
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ]
+            )
+            content = response.choices[0].message.content
+            if content is None:
+                content = ""
 
-        if session_id:
-            database.log_event(session_id, "llm_response", {"recipe": recipe_name, "response": content})
+            if session_id:
+                database.log_event(session_id, "llm_response", {"recipe": recipe_name, "response": content})
 
-        ingredients = []
-        for line in content.split('\n'):
-            line = line.strip()
-            if not line: continue
-            line = re.sub(r'^[\s\-\*\d\.\)]+', '', line).strip()
-            if line:
-                ingredients.append(line)
-        return ingredients
-    except Exception as e:
-        print(f"LLM Error: {e}")
-        if session_id:
-            database.log_event(session_id, "llm_error", {"recipe": recipe_name, "error": str(e)})
-        raise e
+            ingredients = []
+            for line in content.split('\n'):
+                line = line.strip()
+                if not line: continue
+                line = re.sub(r'^[\s\-\*\d\.\)]+', '', line).strip()
+                if line:
+                    ingredients.append(line)
+            return ingredients
+        except Exception as e:
+            if "503" in str(e) and attempt < max_retries - 1:
+                time.sleep(2 ** attempt) # Exponential backoff
+                continue
+            print(f"LLM Error: {e}")
+            if session_id:
+                database.log_event(session_id, "llm_error", {"recipe": recipe_name, "error": str(e)})
+            raise e
 
-def normalize_ingredients_batch(ingredients, session_id=None):
-    if not ingredients:
+def normalize_ingredients_batch(recipe_ingredients, session_id=None):
+    if not recipe_ingredients:
         return []
     
+    ingredients = [i['raw'] for i in recipe_ingredients]
+    
     system_prompt = (
-        "You are a culinary data specialist. Your task is to normalize a list of raw ingredient strings into a structured JSON format. "
-        "Return a JSON object with an 'ingredients' key containing an array of objects. "
+        "You are a culinary data specialist. Your task is to normalize raw ingredient strings into structured JSON. \n"
+        "Return a JSON object with an 'ingredients' key containing an array of objects. \n"
         "Each object must have 'name', 'quantity', 'unit', and 'original_index'. \n"
-        "Guidelines:\n"
-        "- 'name': The base ingredient (e.g., 'onion', 'chicken breast'). Remove preparation adjectives like 'chopped', 'diced' unless essential. \n"
-        "  CRITICAL: If the input has a compound or descriptive unit like '3.2-ounce package' or '1-inch piece', move the descriptive part into the name, e.g., 'Japanese curry roux (3.2-ounce package)' or 'Ginger (1-inch piece)'.\n"
-        "- 'quantity': A numeric string (e.g., '1', '0.5', '1.5'). Do not include units here.\n"
-        "- 'unit': A single standard unit (e.g., 'cup', 'tbsp', 'oz', 'lb', 'gram', 'clove', 'can', 'pkg', 'piece', 'box'). If it's a simple count, use 'count'.\n"
-        "- 'original_index': The integer index of the ingredient in the input list (starting from 0).\n"
-        "CRITICAL: You must provide an entry for EVERY ingredient in the input list. Return ONLY the JSON object."
+        "GUIDELINES:\n"
+        "- 'name': Use the most generic singular noun (e.g., 'Parmesan cheese' -> 'parmesan', 'cannellini beans' -> 'white beans', 'garlic cloves' -> 'garlic').\n"
+        "  CRITICAL (Component Awareness): If an item is a component of another (e.g., 'oil from sun-dried tomatoes'), normalize it to the parent item (e.g., 'sun-dried tomatoes in oil') to ensure they aggregate into a single purchase.\n"
+        "  CRITICAL (Compound Items): If an input has multiple items (e.g., 'Cilantro and avocado'), split them into separate objects with the same 'original_index'.\n"
+        "- 'quantity': A numeric string (e.g., '1', '0.5'). Ignore leading redundant numbers (e.g., '1 15oz can' -> quantity '15').\n"
+        "- 'unit': Standardize to 'cup', 'tbsp', 'oz', 'lb', 'gram', 'clove', 'can', 'pkg', 'piece', 'box', or 'count' (for simple counts).\n"
+        "- 'original_index': The integer index (0-based) from the input list.\n"
+        "CRITICAL: Strip prices (e.g., '($0.63)') and return ONLY the JSON object."
     )
     
     user_prompt = "Normalize these ingredients:\n" + "\n".join([f"{i}: {ing}" for i, ing in enumerate(ingredients)])
 
-    try:
-        response = llm_client.chat.completions.create(
-            model=LLM_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            response_format={"type": "json_object"}
-        )
-        data = json.loads(response.choices[0].message.content)
-        normalized_list = data.get("ingredients", [])
-        
-        # Match back to original list using original_index
-        indexed_norms = {int(norm.get("original_index", -1)): norm for norm in normalized_list}
-        results = []
-        for i, raw in enumerate(ingredients):
-            norm = indexed_norms.get(i)
-            if norm:
-                results.append({
-                    "name": str(norm.get("name", raw)),
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = llm_client.chat.completions.create(
+                model=LLM_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                response_format={"type": "json_object"}
+            )
+            data = json.loads(response.choices[0].message.content)
+            normalized_list = data.get("ingredients", [])
+            
+            # Match back to original list using original_index
+            results = []
+            indexed_norms = {}
+            for norm in normalized_list:
+                idx = int(norm.get("original_index", -1))
+                if idx not in indexed_norms:
+                    indexed_norms[idx] = []
+                indexed_norms[idx].append({
+                    "name": str(norm.get("name", "unknown")),
                     "quantity": str(norm.get("quantity", "1")),
                     "unit": str(norm.get("unit", "count"))
                 })
-            else:
-                results.append({"name": raw, "quantity": "1", "unit": "count"})
-        return results
-    except Exception as e:
-        print(f"Batch Normalization LLM Error: {e}")
-        return [{"name": ing, "quantity": "1", "unit": "count"} for ing in ingredients]
+
+            for i, item in enumerate(recipe_ingredients):
+                norms = indexed_norms.get(i)
+                if norms:
+                    for n in norms:
+                        results.append((item, n))
+                else:
+                    results.append((item, {"name": item['raw'], "quantity": "1", "unit": "count"}))
+            return results
+        except Exception as e:
+            if "503" in str(e) and attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            print(f"Batch Normalization LLM Error: {e}")
+            return [(item, {"name": item['raw'], "quantity": "1", "unit": "count"}) for item in recipe_ingredients]
 
 def normalize_ingredient(text, session_id=None):
     """
     Fallback/Single version - now uses batch version.
     """
-    return normalize_ingredients_batch([text], session_id=session_id)[0]
+    results = normalize_ingredients_batch([{"raw": text, "source": "manual", "type": "manual"}], session_id=session_id)
+    return results[0][1]
 
 import math
 
@@ -428,9 +456,10 @@ def process_tasks(tasks, session_id):
                 continue
 
             # Batch normalize all ingredients for this recipe
-            raw_ings = [item["raw"] for item in recipe_ingredients]
-            yield f"data: {json.dumps({'status': f'[{i+1}/{total_tasks}] Normalizing {len(raw_ings)} ingredients...'})}\n\n"
-            normalized_ings = normalize_ingredients_batch(raw_ings, session_id=session_id)
+            yield f"data: {json.dumps({'status': f'[{i+1}/{total_tasks}] Normalizing {len(recipe_ingredients)} ingredients...'})}\n\n"
+            
+            # Returns list of (item, norm)
+            normalized_results = normalize_ingredients_batch(recipe_ingredients, session_id=session_id)
 
             types = list(set(i['type'] for i in recipe_ingredients))
             source_type = "mixed" if len(types) > 1 else (types[0] if types else "unknown")
@@ -438,13 +467,12 @@ def process_tasks(tasks, session_id):
             database.log_event(session_id, "raw_ingredients", {
                 "recipe": recipe_name,
                 "source": source_type,
-                "ingredients": raw_ings
+                "ingredients": [r['raw'] for r in recipe_ingredients]
             })
 
-            for item, norm in zip(recipe_ingredients, normalized_ings):
+            for item, norm in normalized_results:
                 raw_ing = item["raw"]
                 source_name = item["source"]
-                # norm is from batch
 
                 database.log_event(session_id, "normalization", {
                     "input": raw_ing,

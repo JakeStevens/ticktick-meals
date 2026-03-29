@@ -10,8 +10,14 @@ class TestBadInfo(unittest.TestCase):
     def setUp(self):
         self.app = app.test_client()
         self.app.testing = True
-        self.bad_info_file = "bad_info.jsonl"
-        self.test_db = "test_meal_planner_badinfo.db"
+        self.test_dir = "/tmp/test_ticktick"
+        if not os.path.exists(self.test_dir):
+            os.makedirs(self.test_dir)
+        
+        self.bad_info_file = os.path.join(self.test_dir, "bad_info.jsonl")
+        self.test_db = os.path.join(self.test_dir, "test_meal_planner.db")
+        
+        os.environ["DB_PATH"] = self.test_db
         database.close_db()
         database.DB_FILE = self.test_db
         database.init_db()
@@ -24,6 +30,11 @@ class TestBadInfo(unittest.TestCase):
             os.remove(self.bad_info_file)
         if os.path.exists(self.test_db):
             os.remove(self.test_db)
+        if os.path.exists(self.test_dir):
+            try:
+                os.rmdir(self.test_dir)
+            except:
+                pass
 
     @patch('app.load_token')
     @patch('app.requests.get')

@@ -79,6 +79,7 @@
             
             <div class="d-flex justify-content-center align-items-center my-3">
                 <span id="ingredient-display">Onions</span>
+                <button onclick="handleCorrect()" class="btn btn-sm btn-outline-primary ms-3" title="Correct Name">✏️</button>
             </div>
             
             <div id="recipe-context">
@@ -388,6 +389,23 @@
                     source_recipes: [...new Set(item.instances.map(i => i.source))],
                     action: action
                 });
+            }
+        }
+
+        function handleCorrect() {
+            const item = ingredientsQueue[currentIndex];
+            const newName = prompt("Correct name for this item:", item.name);
+            if (newName && newName !== item.name) {
+                // Log as bad info automatically since user had to correct it
+                badInfoItems.push({
+                    name: item.name,
+                    raw_context: item.instances.map(i => i.raw),
+                    source_recipes: [...new Set(item.instances.map(i => i.source))],
+                    action: "manual_correction",
+                    correction: newName
+                });
+                item.name = newName;
+                showCurrentItem();
             }
         }
 
