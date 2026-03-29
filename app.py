@@ -727,7 +727,7 @@ def create_grocery_list():
                     final_name, 
                     final_name, 
                     source_str, 
-                    f"flagged_bad_info_{action}"
+                    f"ai_error_{action}"
                 )
 
     if not selected_items:
