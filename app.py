@@ -158,6 +158,11 @@ def callback():
     else:
         return f"Error logging in: {response.text}"
 
+@app.route("/audit")
+def audit():
+    logs = database.get_audit_logs(limit=500)
+    return render_template("audit.html", logs=logs)
+
 def get_ingredients_from_llm(recipe_name, session_id=None, ignore_recipe=None):
     system_prompt = "You are a helpful culinary assistant. Provide only a simple bulleted list of high-level ingredient names. Do not include any Markdown code blocks, JSON formatting, or preamble/postamble. If no ingredients are needed, return an empty response."
     user_prompt = f"List the ingredients required for a typical version of {recipe_name}. Keep the ingredients high level, things like spices can be assumed to be available. Provide the list as a simple bulleted list of ingredient names only. If the entry is something that doesn't need ingredients, such as 'left overs', 'freezer meal', 'takeout', 'Brassica', 'date night', or similar non-recipe items, return an empty response. IMPORTANT: If the item itself is a 'prepped' dish that can be considered a single ingredient (e.g., 'Risotto', 'Mac n Cheese', 'Frozen Pizza', 'Salad Kit'), simply return that item name as the sole ingredient."
@@ -256,6 +261,8 @@ def normalize_ingredient(text, session_id=None):
     """
     return normalize_ingredients_batch([text], session_id=session_id)[0]
 
+import math
+
 def format_quantity(quantity_obj):
     """Formats a Pint Quantity object into a readable string and unit."""
     try:
@@ -286,6 +293,49 @@ def format_quantity(quantity_obj):
         return m_str, u_str
     except:
         return str(round(quantity_obj.magnitude, 2)), str(quantity_obj.units)
+
+PACKAGE_SIZES = [
+    {"keywords": ["pasta", "penne", "spaghetti", "linguine", "fusilli", "rotini", "macaroni", "noodles"], "size": 16 * ureg.ounce, "unit": "box"},
+    {"keywords": ["tuna"], "size": 5 * ureg.ounce, "unit": "can"},
+    {"keywords": ["black beans", "kidney beans", "garbanzo beans", "chickpeas", "cannellini beans"], "size": 15 * ureg.ounce, "unit": "can"},
+    {"keywords": ["diced tomatoes", "crushed tomatoes", "tomato sauce", "tomato puree"], "size": 14.5 * ureg.ounce, "unit": "can"},
+    {"keywords": ["broth", "stock"], "size": 32 * ureg.ounce, "unit": "carton"},
+    {"keywords": ["rice"], "size": 32 * ureg.ounce, "unit": "bag"},
+]
+
+def format_ingredient_quantity(name, qty_obj):
+    """Formats quantity, rounding up to common package sizes if applicable."""
+    if not qty_obj:
+        return name
+    
+    name_lower = name.lower()
+    for entry in PACKAGE_SIZES:
+        if any(kw in name_lower for kw in entry['keywords']):
+            try:
+                # Ensure dimensions match (e.g., both mass)
+                pkg_size = entry['size']
+                if qty_obj.check(pkg_size.dimensionality):
+                    total_in_pkg_unit = qty_obj.to(pkg_size.units).magnitude
+                    pkg_size_mag = pkg_size.magnitude
+                    num_pkgs = math.ceil(total_in_pkg_unit / pkg_size_mag)
+                    
+                    q_str, u_str = format_quantity(qty_obj)
+                    total_desc = f" ({q_str} {u_str})" if u_str else f" ({q_str})"
+                    
+                    unit_name = entry['unit']
+                    if num_pkgs > 1:
+                        if unit_name.endswith('x'): unit_name += "es"
+                        else: unit_name += "s"
+                    
+                    return f"{num_pkgs} {unit_name} {name}{total_desc}"
+            except Exception as e:
+                print(f"Error calculating package size for {name}: {e}")
+                break
+
+    q_str, u_str = format_quantity(qty_obj)
+    if u_str:
+        return f"{q_str} {u_str} {name}"
+    return f"{q_str} {name}"
 
 LIKELY_HAVE_KEYWORDS = {
     "salt", "pepper", "black pepper", "kosher salt", "cooking oil", "olive oil", 
@@ -459,14 +509,7 @@ def process_tasks(tasks, session_id):
             v["original_task_ids"] = list(v["original_task_ids"])
 
             qty_obj = v.pop("total_qty")
-            if qty_obj:
-                q_str, u_str = format_quantity(qty_obj)
-                if u_str:
-                    v["name"] = f"{q_str} {u_str} {v['base_name']}"
-                else:
-                    v["name"] = f"{q_str} {v['base_name']}"
-            else:
-                v["name"] = v["base_name"]
+            v["name"] = format_ingredient_quantity(v["base_name"], qty_obj)
 
             results.append(v)
 

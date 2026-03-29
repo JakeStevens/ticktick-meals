@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ingredient Audit Log</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #333; max-width: 1200px; margin: 0 auto; padding: 20px; background-color: #f4f7f6; }
+        h1 { color: #2c3e50; }
+        .nav { margin-bottom: 20px; }
+        .nav a { text-decoration: none; color: #3498db; font-weight: bold; }
+        .nav a:hover { text-decoration: underline; }
+        table { width: 100%; border-collapse: collapse; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-radius: 8px; overflow: hidden; }
+        th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #eee; }
+        th { background-color: #3498db; color: white; text-transform: uppercase; font-size: 14px; letter-spacing: 0.03em; }
+        tr:hover { background-color: #f9f9f9; }
+        .outcome-added { color: #27ae60; font-weight: bold; }
+        .outcome-rejected { color: #c0392b; }
+        .outcome-manual { color: #f39c12; }
+        .correction { background-color: #fff3cd; padding: 2px 4px; border-radius: 3px; font-size: 0.9em; }
+        .timestamp { font-size: 0.85em; color: #7f8c8d; }
+        .session-id { font-family: monospace; font-size: 0.85em; color: #7f8c8d; }
+    </style>
+</head>
+<body>
+    <div class="nav">
+        <a href="{{ url_for('index') }}">&larr; Back to Planner</a>
+    </div>
+    <h1>Ingredient Audit Log</h1>
+    <p>Showing the last 500 processed ingredients.</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Timestamp</th>
+                <th>Raw Ingredient</th>
+                <th>Normalized</th>
+                <th>Final Name</th>
+                <th>Source</th>
+                <th>Outcome</th>
+                <th>Correction</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for log in logs %}
+            <tr>
+                <td class="timestamp">{{ log.created_at.split('T')[0] }}<br>{{ log.created_at.split('T')[1].split('.')[0] }}</td>
+                <td>{{ log.ingredient_raw }}</td>
+                <td>{{ log.ingredient_normalized }}</td>
+                <td>{{ log.ingredient_final }}</td>
+                <td>{{ log.source_recipe }}</td>
+                <td>
+                    <span class="outcome-{{ log.outcome.split('_')[0] }}">
+                        {{ log.outcome }}
+                    </span>
+                </td>
+                <td>
+                    {% if log.correction_made %}
+                    <span class="correction">Yes</span>
+                    {% else %}
+                    -
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</body>
+</html>

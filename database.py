@@ -80,6 +80,17 @@ def log_event(session_id, event_type, data):
               (session_id, event_type, json.dumps(data), datetime.now().isoformat()))
     conn.commit()
 
+def get_audit_logs(limit=200):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("""SELECT id, session_id, ingredient_raw, ingredient_normalized, ingredient_final, source_recipe, outcome, correction_made, created_at 
+                 FROM audit_log ORDER BY created_at DESC LIMIT ?""", (limit,))
+    columns = [column[0] for column in c.description]
+    results = []
+    for row in c.fetchall():
+        results.append(dict(zip(columns, row)))
+    return results
+
 def complete_session(session_id):
     conn = get_connection()
     c = conn.cursor()
