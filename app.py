@@ -689,46 +689,44 @@ def create_grocery_list():
 
         selected_objects = data.get("selected_objects", [])
         
+        # Collect raw ingredients flagged as bad info to merge into outcomes
+        bad_info_raws = set()
+        for item in bad_info_items:
+            for raw in item.get("raw_context", []):
+                bad_info_raws.add(raw)
+
         # 1. Approved items
         for obj in selected_objects:
             final_name = obj.get('name')
             base_name = obj.get('base_name')
             
             for inst in obj.get('instances', []):
+                raw = inst.get('raw')
+                outcome = "added"
+                if raw in bad_info_raws:
+                    outcome += "_ai_error"
+                
                 database.log_audit(
                     session_id, 
-                    inst.get('raw'), 
+                    raw, 
                     base_name, 
                     final_name, 
                     inst.get('source'), 
-                    "added"
+                    outcome
                 )
 
         # 2. Rejections
         for rej in rejected_items:
             for raw in rej.get('context', []):
-                database.log_audit(session_id, raw, rej.get('name'), rej.get('name'), "Unknown", f"rejected_{rej.get('reason')}")
+                outcome = f"rejected_{rej.get('reason')}"
+                if raw in bad_info_raws:
+                    outcome += "_ai_error"
+                    
+                database.log_audit(session_id, raw, rej.get('name'), rej.get('name'), "Unknown", outcome)
 
         # 3. Manual items
         for item in manual_items:
              database.log_audit(session_id, "N/A", item, item, "Manual Entry", "added_manual")
-
-        # 4. Bad Info items
-        for item in bad_info_items:
-            final_name = item.get("name")
-            action = item.get("action", "unknown")
-            source_recipes = item.get("source_recipes", [])
-            source_str = ", ".join(source_recipes) if source_recipes else "Unknown"
-            
-            for raw in item.get("raw_context", []):
-                database.log_audit(
-                    session_id, 
-                    raw, 
-                    final_name, 
-                    final_name, 
-                    source_str, 
-                    f"ai_error_{action}"
-                )
 
     if not selected_items:
         return jsonify({"status": "No items to add", "bad_info_saved": len(bad_info_items)})
