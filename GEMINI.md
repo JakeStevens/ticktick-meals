@@ -1,40 +1,38 @@
-# Analysis & Actionable Updates Guide
+# Analysis & Debugging Guide
 
-This guide outlines how to analyze the Meal Planner's audit and system logs to identify patterns and derive actionable improvements for the extraction and normalization pipeline.
+This guide describes the tooling and procedures for analyzing the Meal Planner's operational data to improve extraction and normalization.
 
-## 1. Locating Data
-- **Active Database:** Located at `/app/data/meal_planner.db` inside the `jake_ticktick_1` container (mapped from the `ticktick-data` Podman volume).
-- **Bad Info Logs:** Stored at `/app/data/bad_info.jsonl`. This is the primary source for identifying LLM failures and manual user corrections.
+## 1. Execution Environment
+Most analysis must be performed **inside the running container** to access the active database and dependencies.
 
-## 2. Analysis Tools
-Use the following scripts to identify trends:
-- `python3 audit_analysis.py`: Summarizes outcome distributions, top rejections, and common LLM corrections.
-- `python3 system_analysis.py`: Analyzes event types and provides a deep dive into normalization and extraction patterns.
+- **Command:** `sudo podman exec -it jake_ticktick_1 /bin/bash`
+- **Working Directory:** `/app`
 
-## 3. Deriving Actionable Updates
-When analyzing logs, look for the following "Actionable Signals":
+## 2. Key File Locations (Inside Container)
+- **Active Database:** `/app/data/meal_planner.db` (Persistent SQLite DB)
+- **Bad Info Log:** `/app/data/bad_info.jsonl` (Append-only record of AI errors and manual corrections)
+- **Rejections Log:** `/app/data/rejections.jsonl` (Append-only record of skipped items)
 
-### A. High Frequency of Manual Corrections
-Check `bad_info.jsonl` for the `manual_correction` action.
-- **Signal:** Users consistently changing a specific unit (e.g., "0.5 cup" -> "1 unit").
-- **Action:** Update the Normalization Prompt to prioritize "grocery-friendly" units for that ingredient.
+## 3. Analysis Tooling
+The following scripts are available in the repository for data-driven debugging:
 
-### B. Aggregation Failures
-Check the `aggregation` events in the system logs.
-- **Signal:** Similar items (e.g., "Parmesan" and "Parmesan cheese") appearing as separate entries.
-- **Action:** Refine the Normalization Prompt to use more generic singular nouns for the base names of those categories.
+### `audit_analysis.py`
+Provides a high-level summary of user outcomes. Use this to identify:
+- Distribution of item outcomes (Added, Have It, Skipped).
+- Most common ingredients requiring manual correction.
+- Top recipe sources by ingredient volume.
 
-### C. Ingredient Breakdown (Over-Extraction)
-Check `llm_response` for "prepped" items that were split into raw components.
-- **Signal:** "Chicken Tenders" becoming "Chicken breast, flour, oil."
-- **Action:** Add the specific item to the "Prepped Items" list in the `get_ingredients_from_llm` prompt.
+### `system_analysis.py`
+Provides a technical breakdown of the pipeline's internals. Use this to identify:
+- Event type distribution (normalization, aggregation, raw extraction).
+- Common normalization patterns (Raw -> Normalized base name).
+- Trends in LLM extraction responses.
 
-### D. Component Redundancy
-Look for ingredients that are part of another item.
-- **Signal:** "Oil from sun-dried tomatoes" appearing alongside "Sun-dried tomatoes in oil."
-- **Action:** Update the "Component Awareness" section of the Normalization Prompt to map subsets to their parent items.
-
-## 4. Validation Workflow
-After updating prompts based on the above signals:
-1. Run `test_bad_info.py` to ensure core logging functionality remains intact.
-2. Run a "Test Scan" with the reproduction input to confirm the fix (e.g., verifying "Chicken Tenders" are no longer broken down).
+## 4. Maintenance Workflow
+1. **Identify Patterns:** Use the analysis tools inside the pod to find recurring errors (e.g., failed merges, incorrect units).
+2. **Modify Prompts:** Update the `system_prompt` variables in `app.py` for extraction or normalization.
+3. **Validate:**
+   - Use **Test Mode** in the web UI to reproduce the scenario.
+   - Run `python3 test_bad_info.py` to ensure log persistence remains functional.
+4. **Deploy:** Restart the container suite to apply prompt changes:
+   `sudo podman pod rm -f pod_jake && sudo podman-compose up -d --build`
