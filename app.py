@@ -713,6 +713,23 @@ def create_grocery_list():
         for item in manual_items:
              database.log_audit(session_id, "N/A", item, item, "Manual Entry", "added_manual")
 
+        # 4. Bad Info items
+        for item in bad_info_items:
+            final_name = item.get("name")
+            action = item.get("action", "unknown")
+            source_recipes = item.get("source_recipes", [])
+            source_str = ", ".join(source_recipes) if source_recipes else "Unknown"
+            
+            for raw in item.get("raw_context", []):
+                database.log_audit(
+                    session_id, 
+                    raw, 
+                    final_name, 
+                    final_name, 
+                    source_str, 
+                    f"flagged_bad_info_{action}"
+                )
+
     if not selected_items:
         return jsonify({"status": "No items to add", "bad_info_saved": len(bad_info_items)})
 
